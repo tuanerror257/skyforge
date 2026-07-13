@@ -6,56 +6,53 @@
 <title>Skyforge</title>
 <!--
   ============================================================================
-  SKYFORGE — game không chiến 3D arcade (Phase 2: thế giới)
+  SKYFORGE — game không chiến 3D arcade (Phase 3: vũ khí + HUD + âm thanh)
   ============================================================================
 
   KIẾN TRÚC
   ---------
   Một file duy nhất, Three.js qua CDN importmap. Code chia section:
 
-    [CONFIG]   — mọi hằng số gameplay gom một chỗ để dễ cân chỉnh
-    [NOISE]    — simplex noise 2D + fbm cho terrain
-    [INPUT]    — bàn phím thô -> trục điều khiển đã làm mượt (-1..1)
-    [WORLD]    — scene, ánh sáng, skybox gradient, fog
-    [TERRAIN]  — heightmap 3 vùng (núi/hoang mạc/biển) trộn bằng noise,
-                 một BufferGeometry duy nhất + vertex color, flat shading.
-                 heightAt(x,z) dùng chung cho sinh terrain VÀ va chạm.
-    [SCENERY]  — mặt biển sóng, cột đá hoang mạc, mây instanced
-    [PLANE]    — tiêm kích low-poly + afterburner + khói đầu cánh
-    [FLIGHT]   — mô hình bay arcade, fixed timestep 60Hz, biên mềm
-    [CAMERA]   — 2 chế độ (phím C): bám đuôi lò xo / buồng lái
-    [LOOP]     — tích lũy thời gian, step 60Hz cố định, render theo màn hình
+    [CONFIG]    — mọi hằng số gameplay gom một chỗ để dễ cân chỉnh
+    [NOISE]     — simplex noise 2D + fbm cho terrain
+    [INPUT]     — bàn phím thô -> trục điều khiển đã làm mượt (-1..1)
+    [WORLD]     — scene, ánh sáng, skybox gradient, fog
+    [TERRAIN]   — heightmap 3 vùng trộn noise, 1 BufferGeometry vertex color;
+                  heightAt(x,z) dùng chung cho sinh terrain VÀ va chạm
+    [SCENERY]   — mặt biển sóng, cột đá hoang mạc, mây instanced
+    [PARTICLES] — pool hạt dùng chung (khói cánh, vệt tên lửa, tia lửa nổ)
+    [AUDIO]     — Web Audio: động cơ theo ga, pháo, nổ, khóa mục tiêu
+    [PLANE]     — tiêm kích low-poly + afterburner
+    [TARGETS]   — bia tập bắn lơ lửng (Phase 4 thay bằng địch AI)
+    [WEAPONS]   — pháo (đạn bay thật + quá nhiệt), tên lửa (khóa + bám)
+    [FX]        — nổ (cầu lửa + hạt + mảnh vỡ), rung màn hình, hit marker
+    [FLIGHT]    — mô hình bay arcade, fixed timestep 60Hz, biên mềm
+    [CAMERA]    — 2 chế độ (phím C): bám đuôi lò xo / buồng lái
+    [HUD]       — Canvas2D: thước tốc độ/độ cao/hướng, vòng ngắm + đón đầu,
+                  khóa mục tiêu, thanh ga/nhiệt/máu, radar mini
+    [LOOP]      — step 60Hz cố định tách khỏi render
 
-  MÔ HÌNH BAY (arcade, không mô phỏng)
-  ------------------------------------
-  - Vận tốc LUÔN dọc vector mũi, độ lớn do ga quyết định (40..180).
-  - Input xoay làm mượt rồi nhân tốc độ xoay tối đa.
-  - Dưới 60 đơn vị/s: mũi bị kéo chúc xuống nhẹ.
-  - Chạm địa hình/trần: đẩy lại + giảm tốc. Biên 8000x8000 đẩy mềm về tâm.
+  MÔ HÌNH BAY (arcade): vận tốc luôn dọc mũi, độ lớn theo ga (40..180),
+  input xoay làm mượt, stall dưới 60, chạm đất nảy, biên mềm đẩy về tâm.
   ============================================================================
 -->
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
   canvas { display: block; }
-  #info {
-    position: fixed; left: 12px; bottom: 10px;
-    font-family: "Courier New", monospace; font-size: 13px;
-    color: rgba(255,255,255,.85); text-shadow: 0 1px 3px rgba(0,0,0,.6);
-    user-select: none; pointer-events: none; line-height: 1.5;
-  }
+  #hud { position: fixed; inset: 0; pointer-events: none; }
   /* Khung kính buồng lái — chỉ hiện ở chế độ cockpit */
   #cockpitFrame { position: fixed; inset: 0; pointer-events: none; display: none; }
   #cockpitFrame .strut {
     position: absolute; background: linear-gradient(#3a4450, #232a33);
     box-shadow: 0 0 12px rgba(0,0,0,.7);
   }
-  #cockpitFrame .left  { left: 0;  top: 0; width: 7%;  height: 100%;
-    transform: skewX(-9deg) translateX(-28%); }
-  #cockpitFrame .right { right: 0; top: 0; width: 7%;  height: 100%;
-    transform: skewX(9deg) translateX(28%); }
-  #cockpitFrame .top   { left: 0;  top: 0; width: 100%; height: 5%;
+  #cockpitFrame .left  { left: 0;  top: 0; width: 6%;  height: 100%;
+    transform: skewX(-9deg) translateX(-30%); }
+  #cockpitFrame .right { right: 0; top: 0; width: 6%;  height: 100%;
+    transform: skewX(9deg) translateX(30%); }
+  #cockpitFrame .top   { left: 0;  top: 0; width: 100%; height: 4%;
     border-radius: 0 0 45% 45%; }
-  #cockpitFrame .dash  { left: 0; bottom: 0; width: 100%; height: 13%;
+  #cockpitFrame .dash  { left: 0; bottom: 0; width: 100%; height: 11%;
     border-radius: 38% 38% 0 0; background: linear-gradient(#2b323c, #171c22); }
 </style>
 <script>
@@ -76,10 +73,7 @@ addEventListener('error', e => {
   <div class="strut top"></div><div class="strut left"></div>
   <div class="strut right"></div><div class="strut dash"></div>
 </div>
-<div id="info">
-  W/S chúc-ngóc · A/D roll · Q/E yaw · Shift/Ctrl ga · C đổi góc nhìn<br>
-  Tốc độ: <span id="dbgSpeed">0</span> · Độ cao: <span id="dbgAlt">0</span>
-</div>
+<canvas id="hud"></canvas>
 <script type="module">
 import * as THREE from 'three';
 
@@ -97,25 +91,43 @@ const CFG = {
   INPUT_SMOOTH: 8,
 
   // Thế giới
-  WORLD_SIZE: 8000,
-  BORDER_SOFT: 3600,        // bắt đầu đẩy mềm từ bán kính này
-  CLEARANCE: 4,             // độ hở tối thiểu trên địa hình
-  CEILING_Y: 1400,
+  WORLD_SIZE: 8000, BORDER_SOFT: 3600, CLEARANCE: 4, CEILING_Y: 1400,
 
   // Camera
   CAM_BACK: 22, CAM_UP: 7, CAM_STIFF: 3.5, CAM_LOOK_AHEAD: 30,
+
+  // Pháo
+  GUN_RPM: 900,            // phát/phút
+  GUN_SPEED: 500,          // tốc độ đạn cộng thêm (trên nền tốc độ máy bay)
+  GUN_LIFE: 2.2,           // giây tồn tại của viên đạn
+  GUN_HEAT_TIME: 3,        // bắn liên tục 3s thì quá nhiệt
+  GUN_COOL_TIME: 2,        // nguội từ 100% hết 2s
+  GUN_DAMAGE: 8,
+
+  // Tên lửa
+  MISSILE_COUNT: 4,
+  MISSILE_SPEED: 300,
+  MISSILE_TURN: 1.6,       // rad/s giới hạn góc lượn
+  MISSILE_LIFE: 7,
+  MISSILE_FUSE: 15,        // bán kính nổ gần
+  MISSILE_DAMAGE: 100,
+  LOCK_TIME: 1.5,          // giây cần giữ mục tiêu trong vòng ngắm
+  LOCK_RANGE: 1500,
+  LOCK_CONE: 0.20,         // rad — nón khóa quanh mũi
+
+  // Người chơi
+  PLAYER_HP: 100,
 
   DT: 1 / 60,
 };
 
 // ===========================================================================
-// [NOISE] — simplex noise 2D (Stefan Gustavson, public domain) + fbm
+// [NOISE] — simplex noise 2D + fbm
 // ===========================================================================
 const Simplex = (() => {
   const grad = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
   const p = new Uint8Array(512);
-  // PRNG cố định để thế giới luôn giống nhau giữa các lần chơi
-  let seed = 1337;
+  let seed = 1337; // PRNG cố định -> thế giới giống nhau mỗi lần chơi
   const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   const perm = Array.from({ length: 256 }, (_, i) => i);
   for (let i = 255; i > 0; i--) {
@@ -123,7 +135,6 @@ const Simplex = (() => {
     [perm[i], perm[j]] = [perm[j], perm[i]];
   }
   for (let i = 0; i < 512; i++) p[i] = perm[i & 255];
-
   const F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
   function noise(xin, yin) {
     const s = (xin + yin) * F2;
@@ -141,7 +152,7 @@ const Simplex = (() => {
     if (t1 > 0) { const g = grad[p[ii + i1 + p[jj + j1]] % 8]; t1 *= t1; n += t1 * t1 * (g[0] * x1 + g[1] * y1); }
     let t2 = 0.5 - x2 * x2 - y2 * y2;
     if (t2 > 0) { const g = grad[p[ii + 1 + p[jj + 1]] % 8]; t2 *= t2; n += t2 * t2 * (g[0] * x2 + g[1] * y2); }
-    return 70 * n; // ~[-1, 1]
+    return 70 * n;
   }
   return { noise };
 })();
@@ -163,6 +174,7 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
   if (e.code === 'KeyC' && !e.repeat) toggleCamera();
+  AudioSys.ensure(); // Web Audio cần cử chỉ người dùng đầu tiên
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -178,10 +190,9 @@ function updateInput(dt) {
 }
 
 // ===========================================================================
-// [WORLD] — scene, sky, fog, ánh sáng
+// [WORLD]
 // ===========================================================================
 const scene = new THREE.Scene();
-
 const HORIZON = new THREE.Color(0xf2b46a), ZENITH = new THREE.Color(0x14356e);
 const sky = new THREE.Mesh(
   new THREE.SphereGeometry(7000, 24, 12),
@@ -203,14 +214,7 @@ sun.position.set(0.5, 1, 0.3);
 scene.add(sun, new THREE.HemisphereLight(0x9ec8ff, 0xc9a06a, 0.8));
 
 // ===========================================================================
-// [TERRAIN] — 3 vùng trộn noise, một BufferGeometry, vertex color
-//
-// Bố cục vùng do noise tần số rất thấp quyết định (biome ~ [-1,1]):
-//   biome >  0.18 -> NÚI       (đá xám -> tuyết, đỉnh tới ~600)
-//   biome < -0.18 -> BIỂN/ĐẢO  (đáy dưới mực nước, đảo nhô lên)
-//   ở giữa        -> HOANG MẠC (đụn cát thoải vàng)
-// Vùng chuyển tiếp trộn mượt bằng smoothstep để không có vách đứng.
-// Mực nước biển = y 0.
+// [TERRAIN] — 3 vùng: biome > 0.18 núi, < -0.18 biển/đảo, giữa hoang mạc
 // ===========================================================================
 const T = { SIZE: CFG.WORLD_SIZE, SEGS: 170 };
 
@@ -219,7 +223,6 @@ function smoothstep(a, b, x) {
   return t * t * (3 - 2 * t);
 }
 
-// Trọng số 3 vùng tại (x,z) — luôn cộng lại bằng 1
 function biomeWeights(x, z) {
   const b = fbm(x * 0.00011 + 5.2, z * 0.00011 - 3.7, 3);
   const wMtn = smoothstep(0.10, 0.30, b);
@@ -231,26 +234,21 @@ function heightAt(x, z) {
   const { wMtn, wSea, wDes } = biomeWeights(x, z);
   let h = 0;
   if (wMtn > 0.001) {
-    // Núi: fbm "ridged" — gấp giá trị tuyệt đối cho sống núi sắc
-    const r = 1 - Math.abs(fbm(x * 0.0009, z * 0.0009, 5));
+    const r = 1 - Math.abs(fbm(x * 0.0009, z * 0.0009, 5)); // ridged
     h += wMtn * (40 + Math.pow(r, 2.2) * 620);
   }
   if (wDes > 0.001) {
-    // Hoang mạc: đụn thoải, sóng cát dài
     const d = fbm(x * 0.0016, z * 0.0016, 3) * 18
             + Math.sin(x * 0.004 + fbm(x * 0.0007, z * 0.0007, 2) * 6) * 9;
     h += wDes * (26 + d);
   }
   if (wSea > 0.001) {
-    // Biển: nền -28; đảo = bump noise vượt ngưỡng nhô lên tới ~45
     const isl = fbm(x * 0.0013 + 40, z * 0.0013 - 40, 4);
-    const island = Math.max(0, isl - 0.35) * 220;
-    h += wSea * (-28 + island);
+    h += wSea * (-28 + Math.max(0, isl - 0.35) * 220);
   }
   return h;
 }
 
-// Màu vertex theo vùng + độ cao
 const _c = new THREE.Color();
 const COL = {
   rock: new THREE.Color(0x7d7f84), rockDark: new THREE.Color(0x5a5c60),
@@ -261,13 +259,10 @@ const COL = {
 };
 function colorAt(x, z, h) {
   const { wMtn, wSea } = biomeWeights(x, z);
-  const jitter = fbm(x * 0.008, z * 0.008, 2) * 0.5 + 0.5; // biến thiên nhỏ
-  // Núi: đá -> tuyết theo độ cao
+  const jitter = fbm(x * 0.008, z * 0.008, 2) * 0.5 + 0.5;
   const mtn = COL.rockDark.clone().lerp(COL.rock, jitter)
     .lerp(COL.snow, smoothstep(330, 480, h));
-  // Hoang mạc: hai tông cát
   const des = COL.sandDark.clone().lerp(COL.sand, jitter);
-  // Biển: đáy -> bãi cát (quanh mực nước) -> xanh cây (cao hơn 8)
   const sea = COL.seabed.clone()
     .lerp(COL.beach, smoothstep(-14, 2, h))
     .lerp(COL.green, smoothstep(8, 26, h));
@@ -279,7 +274,7 @@ function colorAt(x, z, h) {
   return _c;
 }
 
-function buildTerrain() {
+{
   const geo = new THREE.PlaneGeometry(T.SIZE, T.SIZE, T.SEGS, T.SEGS);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position;
@@ -293,29 +288,23 @@ function buildTerrain() {
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
-  return new THREE.Mesh(geo, mat);
+  scene.add(new THREE.Mesh(geo,
+    new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true })));
 }
-scene.add(buildTerrain());
 
 // ===========================================================================
 // [SCENERY] — biển, cột đá, mây
 // ===========================================================================
-
-// Mặt biển: plane thấp phân giải, sóng sin CPU mỗi frame
 const water = (() => {
   const geo = new THREE.PlaneGeometry(T.SIZE, T.SIZE, 56, 56);
   geo.rotateX(-Math.PI / 2);
-  const mat = new THREE.MeshPhongMaterial({
+  const mesh = new THREE.Mesh(geo, new THREE.MeshPhongMaterial({
     color: 0x2b6f9e, shininess: 120, specular: 0x88bbdd,
     transparent: true, opacity: 0.9,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = 0;
+  }));
   scene.add(mesh);
   const base = geo.attributes.position.array.slice();
   return {
-    mesh,
     update(t) {
       const p = geo.attributes.position;
       for (let i = 0; i < p.count; i++) {
@@ -327,17 +316,14 @@ const water = (() => {
   };
 })();
 
-// Cột đá hoang mạc: instanced cylinder, chỉ đặt nơi wDes cao
-{
+{ // Cột đá hoang mạc
   const geo = new THREE.CylinderGeometry(1, 1.5, 1, 6);
   const mat = new THREE.MeshLambertMaterial({ color: 0xb98a54, flatShading: true });
-  const COUNT = 90;
-  const inst = new THREE.InstancedMesh(geo, mat, COUNT);
+  const inst = new THREE.InstancedMesh(geo, mat, 90);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
   let placed = 0, tries = 0;
-  while (placed < COUNT && tries++ < 3000) {
-    const x = (Math.random() - .5) * T.SIZE * 0.95;
-    const z = (Math.random() - .5) * T.SIZE * 0.95;
+  while (placed < 90 && tries++ < 3000) {
+    const x = (Math.random() - .5) * T.SIZE * 0.95, z = (Math.random() - .5) * T.SIZE * 0.95;
     if (biomeWeights(x, z).wDes < 0.8) continue;
     const h = 35 + Math.random() * 75, r = 6 + Math.random() * 12;
     s.set(r, h, r);
@@ -349,16 +335,13 @@ const water = (() => {
   scene.add(inst);
 }
 
-// Mây low-poly instanced
-{
-  const geo = new THREE.IcosahedronGeometry(1, 0);
-  const mat = new THREE.MeshLambertMaterial({
-    color: 0xffffff, flatShading: true, transparent: true, opacity: 0.85,
-  });
-  const COUNT = 70;
-  const inst = new THREE.InstancedMesh(geo, mat, COUNT);
+{ // Mây instanced
+  const inst = new THREE.InstancedMesh(
+    new THREE.IcosahedronGeometry(1, 0),
+    new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, transparent: true, opacity: 0.85 }),
+    70);
   const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
-  for (let i = 0; i < COUNT; i++) {
+  for (let i = 0; i < 70; i++) {
     s.set(60 + Math.random() * 130, 18 + Math.random() * 26, 45 + Math.random() * 90);
     m.compose(
       new THREE.Vector3((Math.random() - .5) * T.SIZE, 550 + Math.random() * 380, (Math.random() - .5) * T.SIZE),
@@ -369,8 +352,149 @@ const water = (() => {
 }
 
 // ===========================================================================
-// [PLANE] — tiêm kích low-poly + afterburner + khói đầu cánh
-// Quy ước: mũi hướng -Z
+// [PARTICLES] — pool hạt dùng chung: khói cánh, vệt tên lửa, tia lửa nổ.
+// Points + shader: mỗi hạt có vị trí, vận tốc, tuổi/thọ, cỡ, màu.
+// ===========================================================================
+const Particles = (() => {
+  const MAX = 2000;
+  const pos = new Float32Array(MAX * 3);
+  const vel = new Float32Array(MAX * 3);
+  const age = new Float32Array(MAX).fill(1);
+  const life = new Float32Array(MAX).fill(1);
+  const size = new Float32Array(MAX);
+  const col = new Float32Array(MAX * 3);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('aFrac', new THREE.BufferAttribute(new Float32Array(MAX), 1));
+  geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+  geo.setAttribute('aCol', new THREE.BufferAttribute(col, 3));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    vertexShader: `
+      attribute float aFrac, aSize; attribute vec3 aCol;
+      varying float vA; varying vec3 vC;
+      void main() {
+        vA = 1.0 - aFrac; vC = aCol;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = aSize * (1.0 + aFrac * 2.0) * (300.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      varying float vA; varying vec3 vC;
+      void main() {
+        float d = length(gl_PointCoord - 0.5);
+        if (d > 0.5) discard;
+        gl_FragColor = vec4(vC, vA * 0.5 * (1.0 - d * 1.6));
+      }`,
+  });
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  scene.add(points);
+
+  let head = 0;
+  return {
+    spawn(p, v, lifeSec, sz, r, g, b) {
+      const i = head; head = (head + 1) % MAX;
+      pos[i*3] = p.x; pos[i*3+1] = p.y; pos[i*3+2] = p.z;
+      vel[i*3] = v.x; vel[i*3+1] = v.y; vel[i*3+2] = v.z;
+      age[i] = 0; life[i] = lifeSec; size[i] = sz;
+      col[i*3] = r; col[i*3+1] = g; col[i*3+2] = b;
+    },
+    step(dt) {
+      const frac = geo.attributes.aFrac.array;
+      for (let i = 0; i < MAX; i++) {
+        if (age[i] >= life[i]) { frac[i] = 1; continue; }
+        age[i] += dt;
+        pos[i*3] += vel[i*3] * dt;
+        pos[i*3+1] += vel[i*3+1] * dt;
+        pos[i*3+2] += vel[i*3+2] * dt;
+        vel[i*3+1] -= 15 * dt; // trọng lực nhẹ
+        frac[i] = Math.min(1, age[i] / life[i]);
+      }
+      geo.attributes.position.needsUpdate = true;
+      geo.attributes.aFrac.needsUpdate = true;
+      geo.attributes.aSize.needsUpdate = true;
+      geo.attributes.aCol.needsUpdate = true;
+    },
+  };
+})();
+
+// ===========================================================================
+// [AUDIO] — Web Audio API, khởi tạo ở cử chỉ đầu tiên
+// ===========================================================================
+const AudioSys = (() => {
+  let ctx = null, engine = null, master = null;
+  let noiseBuf = null;
+
+  function ensure() {
+    if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    master.gain.value = 0.5;
+    master.connect(ctx.destination);
+
+    // Buffer nhiễu trắng dùng chung cho pháo/nổ
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 1.5, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+    // Động cơ: 2 saw lệch tần + lowpass, cao độ theo ga
+    const g = ctx.createGain(); g.gain.value = 0.08;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 320;
+    const o1 = ctx.createOscillator(); o1.type = 'sawtooth'; o1.frequency.value = 62;
+    const o2 = ctx.createOscillator(); o2.type = 'sawtooth'; o2.frequency.value = 63.5;
+    o1.connect(f); o2.connect(f); f.connect(g); g.connect(master);
+    o1.start(); o2.start();
+    engine = { o1, o2, f, g };
+  }
+
+  function engineUpdate(throttle, speed) {
+    if (!engine) return;
+    const base = 55 + throttle * 90;
+    engine.o1.frequency.value = base;
+    engine.o2.frequency.value = base * 1.02 + 1;
+    engine.f.frequency.value = 250 + throttle * 900 + speed * 2;
+    engine.g.gain.value = 0.06 + throttle * 0.07;
+  }
+
+  // Tiếng "một phát": nguồn nhiễu + envelope + filter
+  function burst(dur, filterType, freq, gain, freqEnd) {
+    if (!ctx) return;
+    const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+    src.playbackRate.value = 0.9 + Math.random() * 0.2;
+    const f = ctx.createBiquadFilter(); f.type = filterType; f.frequency.value = freq;
+    if (freqEnd) f.frequency.exponentialRampToValueAtTime(freqEnd, ctx.currentTime + dur);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+    src.connect(f); f.connect(g); g.connect(master);
+    src.start(); src.stop(ctx.currentTime + dur);
+  }
+
+  function beep(freq, dur, gain = 0.15, type = 'square') {
+    if (!ctx) return;
+    const o = ctx.createOscillator(); o.type = type; o.frequency.value = freq;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(gain, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
+    o.connect(g); g.connect(master);
+    o.start(); o.stop(ctx.currentTime + dur);
+  }
+
+  return {
+    ensure, engineUpdate,
+    gun:       () => burst(0.09, 'bandpass', 900, 0.5),
+    explosion: () => burst(1.1, 'lowpass', 900, 1.2, 60),
+    missile:   () => burst(0.9, 'bandpass', 500, 0.5, 1800),
+    hit:       () => beep(1500, 0.06, 0.12),
+    lockTick:  () => beep(1150, 0.05, 0.10),
+    locked:    () => beep(880, 0.35, 0.16),
+    noAmmo:    () => beep(220, 0.15, 0.12),
+  };
+})();
+
+// ===========================================================================
+// [PLANE]
 // ===========================================================================
 function buildPlane() {
   const g = new THREE.Group();
@@ -408,89 +532,341 @@ function buildPlane() {
     g.add(fin);
   }
 
-  // Afterburner: nón phát sáng sau đuôi, scale theo ga
-  const abMat = new THREE.MeshBasicMaterial({
-    color: 0xff9a33, transparent: true, opacity: 0.9,
-    blending: THREE.AdditiveBlending, depthWrite: false,
-  });
   // Nón mặc định chĩa +Y; xoay +90° quanh X để mũi nón chĩa +Z (ra sau đuôi)
-  const ab = new THREE.Mesh(new THREE.ConeGeometry(0.7, 4, 8), abMat);
+  const ab = new THREE.Mesh(new THREE.ConeGeometry(0.7, 4, 8),
+    new THREE.MeshBasicMaterial({ color: 0xff9a33, transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false }));
   ab.rotation.x = Math.PI / 2;
   ab.position.z = 7.5;
   g.add(ab);
   g.userData.afterburner = ab;
-
   return g;
 }
 const planeMesh = buildPlane();
 scene.add(planeMesh);
 
-// --- Khói đầu cánh khi quẹo gấp: pool hạt Points với shader fade theo tuổi ---
-const trails = (() => {
-  const MAX = 500;
-  const positions = new Float32Array(MAX * 3);
-  const ages = new Float32Array(MAX).fill(99); // >LIFE nghĩa là "chết"
-  const LIFE = 0.9;
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('age', new THREE.BufferAttribute(ages, 1));
-  const mat = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false,
-    uniforms: {},
-    vertexShader: `
-      attribute float age; varying float vA;
-      void main() {
-        vA = 1.0 - clamp(age / ${LIFE}, 0.0, 1.0);
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = (2.0 + (1.0 - vA) * 9.0) * (300.0 / -mv.z);
-        gl_Position = projectionMatrix * mv;
-      }`,
-    fragmentShader: `
-      varying float vA;
-      void main() {
-        float d = length(gl_PointCoord - 0.5);
-        if (d > 0.5) discard;
-        gl_FragColor = vec4(1.0, 1.0, 1.0, vA * 0.35 * (1.0 - d * 2.0));
-      }`,
-  });
-  const points = new THREE.Points(geo, mat);
-  points.frustumCulled = false;
-  scene.add(points);
+// ===========================================================================
+// [TARGETS] — bia tập bắn: khối cầu cam lơ lửng, bồng bềnh nhẹ.
+// Interface chung cho Phase 4: {pos, vel, hp, alive, mesh, radius}
+// ===========================================================================
+const targets = [];
+{
+  const spots = [
+    // Cụm gần điểm xuất phát để người chơi thấy ngay
+    [0, 280, 300], [180, 320, -100], [-220, 250, -300],
+    // Rải rác khắp bản đồ
+    [900, 380, -1300], [-1400, 300, 500], [2000, 450, 1000],
+    [-800, 420, -2000], [1200, 260, 2200],
+  ];
+  const geo = new THREE.OctahedronGeometry(9, 0);
+  for (const [x, y, z] of spots) {
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+      color: 0xff7733, flatShading: true, emissive: 0x992200, emissiveIntensity: 0.6,
+    }));
+    mesh.position.set(x, y, z);
+    scene.add(mesh);
+    targets.push({
+      pos: mesh.position, vel: new THREE.Vector3(),
+      hp: 24, alive: true, mesh, radius: 10,
+      bob: Math.random() * Math.PI * 2,
+    });
+  }
+}
+let killCount = 0;
 
-  let head = 0;
-  const tipL = new THREE.Vector3(), tipR = new THREE.Vector3();
-  return {
-    step(dt, plane, turnIntensity) {
-      for (let i = 0; i < MAX; i++) ages[i] += dt;
-      // Sinh hạt ở hai đầu cánh khi quẹo đủ gắt và đủ nhanh
-      if (turnIntensity > 0.55 && plane.speed > 95) {
-        tipL.set(-7, 0, 2.6).applyQuaternion(plane.quat).add(plane.pos);
-        tipR.set(7, 0, 2.6).applyQuaternion(plane.quat).add(plane.pos);
-        for (const tip of [tipL, tipR]) {
-          positions[head * 3] = tip.x; positions[head * 3 + 1] = tip.y; positions[head * 3 + 2] = tip.z;
-          ages[head] = 0;
-          head = (head + 1) % MAX;
+function stepTargets(dt, t) {
+  for (const tg of targets) {
+    if (!tg.alive) continue;
+    tg.bob += dt;
+    tg.pos.y += Math.sin(tg.bob * 1.3) * 0.06;
+    tg.mesh.rotation.y += dt * 0.8;
+  }
+}
+
+function damageTarget(tg, dmg, hitPos) {
+  tg.hp -= dmg;
+  FX.hitMarker();
+  AudioSys.hit();
+  if (tg.hp <= 0 && tg.alive) {
+    tg.alive = false;
+    tg.mesh.visible = false;
+    killCount++;
+    FX.explode(tg.pos.clone());
+  }
+}
+
+// ===========================================================================
+// [WEAPONS] — pháo + tên lửa (người chơi; Phase 4 địch dùng chung)
+// ===========================================================================
+const Guns = (() => {
+  const MAX = 200;
+  const geo = new THREE.BoxGeometry(0.3, 0.3, 4); // tracer thuôn dài theo Z
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffdd66, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+  const inst = new THREE.InstancedMesh(geo, mat, MAX);
+  inst.frustumCulled = false;
+  scene.add(inst);
+
+  const bullets = []; // {pos, vel, life}
+  const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(1,1,1);
+  const _look = new THREE.Matrix4(), _up = new THREE.Vector3(0,1,0), _tmp = new THREE.Vector3();
+
+  let fireTimer = 0;
+  const state = { heat: 0, overheated: false };
+
+  function step(dt) {
+    // --- Bắn ---
+    fireTimer -= dt;
+    const wantFire = keys['Space'] && !state.overheated;
+    if (wantFire && fireTimer <= 0) {
+      fireTimer = 60 / CFG.GUN_RPM;
+      const muzzle = _tmp.set(0, 0, -6).applyQuaternion(plane.quat).add(plane.pos).clone();
+      const vel = new THREE.Vector3(0, 0, -1).applyQuaternion(plane.quat)
+        .multiplyScalar(plane.speed + CFG.GUN_SPEED);
+      bullets.push({ pos: muzzle, vel, life: CFG.GUN_LIFE });
+      AudioSys.gun();
+      FX.shake(0.12);
+    }
+    // --- Nhiệt ---
+    if (keys['Space'] && !state.overheated) {
+      state.heat += dt / CFG.GUN_HEAT_TIME;
+    } else {
+      state.heat -= dt / CFG.GUN_COOL_TIME;
+    }
+    state.heat = THREE.MathUtils.clamp(state.heat, 0, 1);
+    if (state.heat >= 1) state.overheated = true;
+    if (state.overheated && state.heat < 0.35) state.overheated = false;
+
+    // --- Cập nhật đạn + va chạm ---
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.life -= dt;
+      b.pos.addScaledVector(b.vel, dt);
+      let dead = b.life <= 0 || b.pos.y < heightAt(b.pos.x, b.pos.z);
+      if (!dead) {
+        for (const tg of targets) {
+          if (!tg.alive) continue;
+          if (b.pos.distanceToSquared(tg.pos) < (tg.radius + 2) ** 2) {
+            damageTarget(tg, CFG.GUN_DAMAGE, b.pos);
+            dead = true;
+            break;
+          }
         }
       }
-      geo.attributes.position.needsUpdate = true;
-      geo.attributes.age.needsUpdate = true;
-    },
+      if (dead) bullets.splice(i, 1);
+    }
+
+    // --- Render instances ---
+    for (let i = 0; i < MAX; i++) {
+      if (i < bullets.length) {
+        const b = bullets[i];
+        _look.lookAt(b.pos, _tmp.copy(b.pos).add(b.vel), _up);
+        _q.setFromRotationMatrix(_look);
+        _m.compose(b.pos, _q, _s);
+      } else {
+        _m.makeScale(0, 0, 0);
+      }
+      inst.setMatrixAt(i, _m);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+  }
+  return { step, state };
+})();
+
+const Missiles = (() => {
+  const live = [];
+  const state = { ammo: CFG.MISSILE_COUNT, lockTarget: null, lockTimer: 0, locked: false };
+  let beepTimer = 0;
+
+  function buildMissile() {
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0xcfd6dd, flatShading: true });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 4, 6), mat);
+    body.rotation.x = Math.PI / 2;
+    const tip = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1, 6), mat);
+    tip.rotation.x = -Math.PI / 2; tip.position.z = -2.5;
+    g.add(body, tip);
+    return g;
+  }
+
+  const _fwd = new THREE.Vector3(), _to = new THREE.Vector3(), _q = new THREE.Quaternion();
+  const _look = new THREE.Matrix4(), _up = new THREE.Vector3(0, 1, 0);
+
+  // Khóa mục tiêu: giữ mục tiêu trong nón LOCK_CONE, dưới LOCK_RANGE, đủ LOCK_TIME
+  function stepLock(dt) {
+    _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+    let best = null, bestAngle = CFG.LOCK_CONE;
+    for (const tg of targets) {
+      if (!tg.alive) continue;
+      _to.copy(tg.pos).sub(plane.pos);
+      const dist = _to.length();
+      if (dist > CFG.LOCK_RANGE) continue;
+      const angle = _fwd.angleTo(_to.normalize());
+      if (angle < bestAngle) { bestAngle = angle; best = tg; }
+    }
+    if (best && best === state.lockTarget) {
+      if (!state.locked) {
+        state.lockTimer += dt;
+        beepTimer -= dt;
+        if (beepTimer <= 0) { AudioSys.lockTick(); beepTimer = 0.22; }
+        if (state.lockTimer >= CFG.LOCK_TIME) { state.locked = true; AudioSys.locked(); }
+      }
+    } else {
+      state.lockTarget = best;
+      state.lockTimer = 0;
+      state.locked = false;
+    }
+  }
+
+  function fire() {
+    if (state.ammo <= 0) { AudioSys.noAmmo(); return; }
+    state.ammo--;
+    const mesh = buildMissile();
+    mesh.position.copy(plane.pos);
+    mesh.quaternion.copy(plane.quat);
+    scene.add(mesh);
+    live.push({
+      mesh, pos: mesh.position, quat: mesh.quaternion,
+      target: state.locked ? state.lockTarget : null,
+      life: CFG.MISSILE_LIFE, smokeTimer: 0,
+    });
+    AudioSys.missile();
+    FX.shake(0.5);
+  }
+
+  function step(dt) {
+    stepLock(dt);
+    for (let i = live.length - 1; i >= 0; i--) {
+      const ms = live[i];
+      ms.life -= dt;
+
+      // Bám mục tiêu: slerp hướng với giới hạn tốc độ xoay
+      if (ms.target && ms.target.alive) {
+        _to.copy(ms.target.pos).sub(ms.pos).normalize();
+        _look.lookAt(new THREE.Vector3(), _to, _up);
+        _q.setFromRotationMatrix(_look);
+        ms.quat.rotateTowards(_q, CFG.MISSILE_TURN * dt);
+      }
+      _fwd.set(0, 0, -1).applyQuaternion(ms.quat);
+      ms.pos.addScaledVector(_fwd, CFG.MISSILE_SPEED * dt);
+
+      // Vệt khói
+      ms.smokeTimer -= dt;
+      if (ms.smokeTimer <= 0) {
+        ms.smokeTimer = 0.02;
+        Particles.spawn(ms.pos, new THREE.Vector3((Math.random()-.5)*3, 2, (Math.random()-.5)*3),
+          1.1, 5, 0.92, 0.92, 0.92);
+      }
+
+      // Nổ gần / chạm đất / hết giờ
+      let boom = ms.life <= 0 || ms.pos.y < heightAt(ms.pos.x, ms.pos.z);
+      if (ms.target && ms.target.alive &&
+          ms.pos.distanceToSquared(ms.target.pos) < CFG.MISSILE_FUSE ** 2) {
+        damageTarget(ms.target, CFG.MISSILE_DAMAGE, ms.pos);
+        boom = true;
+      }
+      if (boom) {
+        FX.explode(ms.pos.clone(), 0.6);
+        scene.remove(ms.mesh);
+        live.splice(i, 1);
+      }
+    }
+  }
+  return { step, fire, state };
+})();
+
+addEventListener('keydown', e => {
+  if (e.code === 'KeyF' && !e.repeat) Missiles.fire();
+});
+
+// ===========================================================================
+// [FX] — nổ, rung màn hình, hit marker
+// ===========================================================================
+const FX = (() => {
+  const explosions = []; // {mesh, t, dur}
+  const debris = [];     // {mesh, vel, spin, life}
+  const boomGeo = new THREE.IcosahedronGeometry(1, 1);
+  const debrisGeo = new THREE.BoxGeometry(1.4, 1.4, 1.4);
+  const debrisMat = new THREE.MeshLambertMaterial({ color: 0x333333, flatShading: true });
+
+  let shakeMag = 0;
+  let hitFlash = 0;
+
+  function explode(pos, scale = 1) {
+    const mesh = new THREE.Mesh(boomGeo, new THREE.MeshBasicMaterial({
+      color: 0xffa030, transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+    mesh.position.copy(pos);
+    scene.add(mesh);
+    explosions.push({ mesh, t: 0, dur: 0.7, scale });
+    // Tia lửa
+    for (let i = 0; i < 30; i++) {
+      const v = new THREE.Vector3((Math.random()-.5), (Math.random()-.3), (Math.random()-.5))
+        .normalize().multiplyScalar(30 + Math.random() * 70 * scale);
+      Particles.spawn(pos, v, 0.9 + Math.random() * 0.5, 4,
+        1, 0.55 + Math.random() * 0.3, 0.15);
+    }
+    // Mảnh vỡ
+    for (let i = 0; i < 7; i++) {
+      const mesh2 = new THREE.Mesh(debrisGeo, debrisMat);
+      mesh2.position.copy(pos);
+      scene.add(mesh2);
+      debris.push({
+        mesh: mesh2,
+        vel: new THREE.Vector3((Math.random()-.5)*70, Math.random()*55, (Math.random()-.5)*70),
+        spin: new THREE.Vector3(Math.random()*7, Math.random()*7, Math.random()*7),
+        life: 1.8,
+      });
+    }
+    AudioSys.explosion();
+    shakeMag = Math.max(shakeMag, 0.8 * scale);
+  }
+
+  function step(dt) {
+    for (let i = explosions.length - 1; i >= 0; i--) {
+      const e = explosions[i];
+      e.t += dt;
+      const f = e.t / e.dur;
+      e.mesh.scale.setScalar((4 + f * 34) * e.scale);
+      e.mesh.material.opacity = 0.95 * (1 - f);
+      if (f >= 1) { scene.remove(e.mesh); explosions.splice(i, 1); }
+    }
+    for (let i = debris.length - 1; i >= 0; i--) {
+      const d = debris[i];
+      d.life -= dt;
+      d.vel.y -= 60 * dt;
+      d.mesh.position.addScaledVector(d.vel, dt);
+      d.mesh.rotation.x += d.spin.x * dt;
+      d.mesh.rotation.y += d.spin.y * dt;
+      if (d.life <= 0 || d.mesh.position.y < heightAt(d.mesh.position.x, d.mesh.position.z)) {
+        scene.remove(d.mesh); debris.splice(i, 1);
+      }
+    }
+    shakeMag = Math.max(0, shakeMag - dt * 2.2);
+    hitFlash = Math.max(0, hitFlash - dt);
+  }
+
+  return {
+    explode, step,
+    shake: m => { shakeMag = Math.min(1.2, shakeMag + m); },
+    hitMarker: () => { hitFlash = 0.18; },
+    get shakeMag() { return shakeMag; },
+    get hitFlash() { return hitFlash; },
   };
 })();
 
 // ===========================================================================
-// [FLIGHT] — trạng thái + mô hình bay arcade + biên mềm
+// [FLIGHT]
 // ===========================================================================
 const plane = {
   pos: new THREE.Vector3(0, 260, 1200),
   quat: new THREE.Quaternion(),
-  speed: 90, throttle: 0.4,
+  speed: 90, throttle: 0.4, hp: CFG.PLAYER_HP,
 };
 
 const _fwd = new THREE.Vector3(), _dq = new THREE.Quaternion(), _axis = new THREE.Vector3();
 
 function stepFlight(dt) {
-  // --- Ga ---
   if (keys['ShiftLeft'] || keys['ShiftRight']) plane.throttle += CFG.THROTTLE_RATE * dt;
   if (keys['ControlLeft'] || keys['ControlRight']) plane.throttle -= CFG.THROTTLE_RATE * dt;
   plane.throttle = THREE.MathUtils.clamp(plane.throttle, 0, 1);
@@ -498,7 +874,6 @@ function stepFlight(dt) {
   const targetSpeed = CFG.THROTTLE_MIN + plane.throttle * (CFG.THROTTLE_MAX - CFG.THROTTLE_MIN);
   plane.speed += (targetSpeed - plane.speed) * Math.min(1, CFG.SPEED_RESPONSE * dt);
 
-  // --- Xoay quanh trục cục bộ ---
   _dq.setFromAxisAngle(_axis.set(1, 0, 0), input.pitch * CFG.PITCH_RATE * dt);
   plane.quat.multiply(_dq);
   _dq.setFromAxisAngle(_axis.set(0, 1, 0), input.yaw * CFG.YAW_RATE * dt);
@@ -506,36 +881,31 @@ function stepFlight(dt) {
   _dq.setFromAxisAngle(_axis.set(0, 0, 1), input.roll * CFG.ROLL_RATE * dt);
   plane.quat.multiply(_dq);
 
-  // --- Stall ---
   if (plane.speed < CFG.STALL_SPEED) {
     const severity = 1 - plane.speed / CFG.STALL_SPEED;
     _dq.setFromAxisAngle(_axis.set(1, 0, 0), severity * CFG.STALL_PITCH * dt);
     plane.quat.multiply(_dq);
   }
 
-  // --- Biên mềm: ngoài bán kính BORDER_SOFT thì lái dần về tâm ---
+  // Biên mềm
   const distXZ = Math.hypot(plane.pos.x, plane.pos.z);
   if (distXZ > CFG.BORDER_SOFT) {
     const over = Math.min(1, (distXZ - CFG.BORDER_SOFT) / 400);
-    // Xoay quaternion về hướng nhìn vào tâm, mạnh dần theo mức vượt biên
-    _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
     const toCenter = _axis.set(-plane.pos.x, 0, -plane.pos.z).normalize();
     const target = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), toCenter);
     plane.quat.slerp(target, over * 0.9 * dt);
   }
   plane.quat.normalize();
 
-  // --- Di chuyển dọc mũi ---
   _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
   plane.pos.addScaledVector(_fwd, plane.speed * dt);
 
-  // --- Va chạm địa hình (và mặt nước) / trần ---
   const floor = Math.max(heightAt(plane.pos.x, plane.pos.z), 0) + CFG.CLEARANCE;
   if (plane.pos.y < floor) {
     plane.pos.y = floor;
     plane.speed *= 0.85;
     _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
-    if (_fwd.y < 0.15) { // ép mũi ngóc nhẹ để "nảy" ra
+    if (_fwd.y < 0.15) {
       _dq.setFromAxisAngle(_axis.set(1, 0, 0), -0.06);
       plane.quat.multiply(_dq);
     }
@@ -545,18 +915,23 @@ function stepFlight(dt) {
   planeMesh.position.copy(plane.pos);
   planeMesh.quaternion.copy(plane.quat);
 
-  // --- Hiệu ứng gắn máy bay ---
   const ab = planeMesh.userData.afterburner;
   const flicker = 0.85 + Math.random() * 0.3;
   ab.scale.set(1, 0.25 + plane.throttle * 1.4 * flicker, 1);
   ab.material.opacity = 0.25 + plane.throttle * 0.7;
 
+  // Khói đầu cánh khi quẹo gắt
   const turnIntensity = Math.max(Math.abs(input.pitch), Math.abs(input.roll));
-  trails.step(dt, plane, turnIntensity);
+  if (turnIntensity > 0.55 && plane.speed > 95) {
+    for (const sx of [-7, 7]) {
+      _axis.set(sx, 0, 2.6).applyQuaternion(plane.quat).add(plane.pos);
+      Particles.spawn(_axis, new THREE.Vector3(0, 1, 0), 0.8, 3, 1, 1, 1);
+    }
+  }
 }
 
 // ===========================================================================
-// [CAMERA] — 2 chế độ: 0 = bám đuôi lò xo, 1 = buồng lái
+// [CAMERA]
 // ===========================================================================
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 15000);
 const camPos = new THREE.Vector3(0, 270, 1230);
@@ -569,28 +944,273 @@ function toggleCamera() {
   cockpitFrame.style.display = camMode === 1 ? 'block' : 'none';
 }
 
-const _anchor = new THREE.Vector3(), _lookAt = new THREE.Vector3(), _up = new THREE.Vector3();
+const _anchor = new THREE.Vector3(), _lookAt = new THREE.Vector3(), _up2 = new THREE.Vector3();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 function updateCamera(dt) {
   if (camMode === 0) {
-    // Bám đuôi có trễ lò xo
     _anchor.set(0, CFG.CAM_UP, CFG.CAM_BACK).applyQuaternion(plane.quat).add(plane.pos);
     camPos.lerp(_anchor, Math.min(1, CFG.CAM_STIFF * dt));
     _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
     _lookAt.copy(plane.pos).addScaledVector(_fwd, CFG.CAM_LOOK_AHEAD);
-    _up.set(0, 1, 0).applyQuaternion(plane.quat).lerp(WORLD_UP, 0.5).normalize();
+    _up2.set(0, 1, 0).applyQuaternion(plane.quat).lerp(WORLD_UP, 0.5).normalize();
     camera.position.copy(camPos);
-    camera.up.copy(_up);
+    camera.up.copy(_up2);
     camera.lookAt(_lookAt);
   } else {
-    // Buồng lái: bám cứng vào ghế lái, xoay đúng theo máy bay
     _anchor.set(0, 1.0, -2.0).applyQuaternion(plane.quat).add(plane.pos);
     camera.position.copy(_anchor);
     camera.quaternion.copy(plane.quat);
-    camPos.copy(_anchor); // để lúc đổi lại chase không giật
+    camPos.copy(_anchor);
+  }
+  // Rung màn hình
+  const m = FX.shakeMag;
+  if (m > 0.001) {
+    camera.position.x += (Math.random() - .5) * m * 1.6;
+    camera.position.y += (Math.random() - .5) * m * 1.6;
   }
   sky.position.copy(camera.position);
+}
+
+// ===========================================================================
+// [HUD] — Canvas2D overlay
+// ===========================================================================
+const hudCanvas = document.getElementById('hud');
+const hud = hudCanvas.getContext('2d');
+const HUD_COLOR = 'rgba(120,255,140,0.9)';
+const HUD_DIM = 'rgba(120,255,140,0.45)';
+
+function resizeHud() {
+  hudCanvas.width = innerWidth * devicePixelRatio;
+  hudCanvas.height = innerHeight * devicePixelRatio;
+  hud.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+}
+resizeHud();
+
+const _proj = new THREE.Vector3(), _rel = new THREE.Vector3();
+// Chiếu điểm 3D ra màn hình; trả null nếu sau lưng camera
+function toScreen(v) {
+  _rel.copy(v).sub(camera.position);
+  _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  if (_rel.dot(_fwd) < 0) return null;
+  _proj.copy(v).project(camera);
+  return { x: (_proj.x * 0.5 + 0.5) * innerWidth, y: (-_proj.y * 0.5 + 0.5) * innerHeight };
+}
+
+function drawHud() {
+  const w = innerWidth, h = innerHeight, cx = w / 2, cy = h / 2;
+  hud.clearRect(0, 0, w, h);
+  hud.strokeStyle = HUD_COLOR; hud.fillStyle = HUD_COLOR;
+  hud.lineWidth = 1.5;
+  hud.font = '13px "Courier New", monospace';
+  hud.textAlign = 'center';
+
+  // --- Vòng ngắm giữa ---
+  hud.beginPath(); hud.arc(cx, cy, 16, 0, Math.PI * 2); hud.stroke();
+  hud.beginPath();
+  hud.moveTo(cx - 26, cy); hud.lineTo(cx - 16, cy);
+  hud.moveTo(cx + 16, cy); hud.lineTo(cx + 26, cy);
+  hud.moveTo(cx, cy - 26); hud.lineTo(cx, cy - 16);
+  hud.stroke();
+
+  // --- Hit marker ---
+  if (FX.hitFlash > 0) {
+    hud.save();
+    hud.strokeStyle = `rgba(255,255,255,${FX.hitFlash / 0.18})`;
+    hud.lineWidth = 2.5;
+    hud.beginPath();
+    for (const [dx, dy] of [[-1,-1],[1,-1],[-1,1],[1,1]]) {
+      hud.moveTo(cx + dx * 8, cy + dy * 8); hud.lineTo(cx + dx * 16, cy + dy * 16);
+    }
+    hud.stroke();
+    hud.restore();
+  }
+
+  // --- Thước tốc độ (trái) ---
+  drawTape(60, cy, plane.speed, 10, 4, true);
+  hud.strokeRect(28, cy - 12, 64, 24);
+  hud.fillText(plane.speed.toFixed(0), 60, cy + 5);
+
+  // --- Thước độ cao (phải) ---
+  drawTape(w - 60, cy, plane.pos.y, 50, 4, false);
+  hud.strokeRect(w - 92, cy - 12, 64, 24);
+  hud.fillText(plane.pos.y.toFixed(0), w - 60, cy + 5);
+
+  // --- Thước hướng (trên) ---
+  drawHeading(cx, 30);
+
+  // --- Mục tiêu: khung + khóa ---
+  drawTargets();
+
+  // --- Thanh trạng thái dưới trái: ga, nhiệt, máu ---
+  drawBars(20, h - 30);
+
+  // --- Tên lửa + kill (dưới phải) ---
+  hud.textAlign = 'right';
+  hud.fillText(`KILL ${killCount}`, w - 20, h - 64);
+  let mstr = '';
+  for (let i = 0; i < CFG.MISSILE_COUNT; i++) mstr += i < Missiles.state.ammo ? '▲ ' : '△ ';
+  hud.fillText(mstr.trim(), w - 20, h - 44);
+  if (Guns.state.overheated) {
+    hud.fillStyle = (performance.now() % 400 < 200) ? 'rgba(255,80,60,.95)' : 'rgba(255,80,60,.4)';
+    hud.fillText('QUÁ NHIỆT', w - 20, h - 24);
+    hud.fillStyle = HUD_COLOR;
+  }
+
+  // --- Radar mini (góc phải trên) ---
+  drawRadar(w - 90, 108, 66, 2200);
+
+  // --- Gợi ý phím (mờ, giữa dưới) ---
+  hud.textAlign = 'center';
+  hud.fillStyle = 'rgba(255,255,255,0.35)';
+  hud.font = '11px "Courier New", monospace';
+  hud.fillText('W/S ngóc-chúc · A/D roll · Q/E yaw · Shift/Ctrl ga · Space pháo · F tên lửa · C camera', cx, h - 8);
+}
+
+// Thước dọc: ticks cách nhau `step` giá trị, `perPx` px cho 1 đơn vị giá trị
+function drawTape(x, cy, value, step, pxPerUnitInv, leftSide) {
+  const range = 90; // giá trị hiển thị ± quanh giá trị hiện tại
+  hud.save();
+  hud.strokeStyle = HUD_DIM; hud.fillStyle = HUD_DIM;
+  hud.textAlign = leftSide ? 'left' : 'right';
+  const pxPer = 90 / range * pxPerUnitInv; // px trên 1 đơn vị
+  const first = Math.ceil((value - range) / step) * step;
+  for (let v = first; v <= value + range; v += step) {
+    if (v < 0) continue;
+    const y = cy + (value - v) * pxPer;
+    if (Math.abs(y - cy) < 16) continue; // chừa chỗ ô số
+    const major = Math.round(v / step) % 2 === 0;
+    hud.beginPath();
+    hud.moveTo(x + (leftSide ? -14 : 14), y);
+    hud.lineTo(x + (leftSide ? -6 : 6), y);
+    hud.stroke();
+    if (major) hud.fillText(v.toFixed(0), x + (leftSide ? -18 : 18), y + 4);
+  }
+  hud.restore();
+}
+
+function drawHeading(cx, y) {
+  _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+  const heading = (Math.atan2(_fwd.x, -_fwd.z) * 180 / Math.PI + 360) % 360;
+  hud.save();
+  hud.strokeStyle = HUD_DIM; hud.fillStyle = HUD_DIM;
+  hud.textAlign = 'center';
+  const pxPerDeg = 4;
+  for (let d = -50; d <= 50; d += 10) {
+    let hd = Math.round((heading + d) / 10) * 10;
+    const off = (hd - heading + 540) % 360 - 180;
+    if (Math.abs(off) > 55) continue;
+    hd = ((hd % 360) + 360) % 360;
+    const x = cx + off * pxPerDeg;
+    hud.beginPath(); hud.moveTo(x, y); hud.lineTo(x, y + 6); hud.stroke();
+    const label = { 0: 'N', 90: 'E', 180: 'S', 270: 'W' }[hd] ?? (hd / 10).toFixed(0);
+    hud.fillText(label, x, y - 4);
+  }
+  hud.restore();
+  hud.strokeRect(cx - 26, y + 10, 52, 20);
+  hud.fillText(heading.toFixed(0).padStart(3, '0'), cx, y + 25);
+  hud.beginPath(); hud.moveTo(cx, y + 8); hud.lineTo(cx - 4, y + 2); hud.lineTo(cx + 4, y + 2);
+  hud.closePath(); hud.fill();
+}
+
+function drawTargets() {
+  const ms = Missiles.state;
+  for (const tg of targets) {
+    if (!tg.alive) continue;
+    const s = toScreen(tg.pos);
+    if (!s) continue;
+    const dist = plane.pos.distanceTo(tg.pos);
+    const isLockCandidate = tg === ms.lockTarget;
+
+    // Khung vuông quanh mục tiêu
+    const size = Math.max(14, 900 / Math.max(60, dist) * 10);
+    hud.save();
+    if (isLockCandidate && ms.locked) {
+      // Đã khóa: kim cương đỏ
+      hud.strokeStyle = 'rgba(255,90,70,0.95)';
+      hud.lineWidth = 2;
+      hud.beginPath();
+      hud.moveTo(s.x, s.y - size); hud.lineTo(s.x + size, s.y);
+      hud.lineTo(s.x, s.y + size); hud.lineTo(s.x - size, s.y);
+      hud.closePath(); hud.stroke();
+      hud.fillStyle = 'rgba(255,90,70,0.95)';
+      hud.fillText('LOCK', s.x, s.y - size - 6);
+    } else {
+      hud.strokeStyle = isLockCandidate ? HUD_COLOR : HUD_DIM;
+      hud.strokeRect(s.x - size, s.y - size, size * 2, size * 2);
+      if (isLockCandidate && ms.lockTimer > 0) {
+        // Cung tiến trình khóa
+        hud.beginPath();
+        hud.arc(s.x, s.y, size + 7, -Math.PI / 2, -Math.PI / 2 + (ms.lockTimer / CFG.LOCK_TIME) * Math.PI * 2);
+        hud.stroke();
+      }
+    }
+    hud.fillStyle = HUD_DIM;
+    hud.fillText(dist.toFixed(0), s.x, s.y + size + 14);
+    hud.restore();
+
+    // Chỉ báo ngắm đón đầu cho pháo (mục tiêu đang nhắm)
+    if (isLockCandidate) {
+      const tof = dist / (plane.speed + CFG.GUN_SPEED); // thời gian đạn bay
+      _rel.copy(tg.pos).addScaledVector(tg.vel, tof);
+      const lead = toScreen(_rel);
+      if (lead) {
+        hud.beginPath(); hud.arc(lead.x, lead.y, 5, 0, Math.PI * 2); hud.stroke();
+        hud.beginPath(); hud.moveTo(lead.x - 9, lead.y); hud.lineTo(lead.x + 9, lead.y);
+        hud.moveTo(lead.x, lead.y - 9); hud.lineTo(lead.x, lead.y + 9); hud.stroke();
+      }
+    }
+  }
+}
+
+function drawBars(x, y) {
+  const bars = [
+    ['GA',    plane.throttle, HUD_COLOR],
+    ['NHIỆT', Guns.state.heat, Guns.state.heat > 0.75 ? 'rgba(255,90,60,.9)' : 'rgba(255,200,80,.9)'],
+    ['MÁU',   plane.hp / CFG.PLAYER_HP, plane.hp > 35 ? HUD_COLOR : 'rgba(255,80,60,.95)'],
+  ];
+  hud.save();
+  hud.textAlign = 'left';
+  for (let i = 0; i < bars.length; i++) {
+    const [label, frac, color] = bars[i];
+    const by = y - (bars.length - 1 - i) * 20;
+    hud.fillStyle = HUD_DIM;
+    hud.fillText(label, x, by + 4);
+    hud.strokeStyle = HUD_DIM;
+    hud.strokeRect(x + 52, by - 6, 120, 12);
+    hud.fillStyle = color;
+    hud.fillRect(x + 52, by - 6, 120 * THREE.MathUtils.clamp(frac, 0, 1), 12);
+  }
+  hud.restore();
+}
+
+function drawRadar(cx, cy, r, range) {
+  hud.save();
+  hud.strokeStyle = HUD_DIM;
+  hud.fillStyle = 'rgba(20,40,25,0.45)';
+  hud.beginPath(); hud.arc(cx, cy, r, 0, Math.PI * 2); hud.fill(); hud.stroke();
+  hud.beginPath(); hud.arc(cx, cy, r / 2, 0, Math.PI * 2); hud.stroke();
+  // Hướng bay = hướng lên của radar
+  _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+  const heading = Math.atan2(_fwd.x, -_fwd.z);
+  for (const tg of targets) {
+    if (!tg.alive) continue;
+    const dx = tg.pos.x - plane.pos.x, dz = tg.pos.z - plane.pos.z;
+    // Xoay để mũi máy bay chỉ lên trên
+    const rx = dx * Math.cos(-heading) - dz * Math.sin(-heading);
+    const rz = dx * Math.sin(-heading) + dz * Math.cos(-heading);
+    const d = Math.hypot(rx, rz);
+    if (d > range) continue;
+    const px = cx + (rx / range) * r, py = cy + (rz / range) * r;
+    hud.fillStyle = 'rgba(255,120,60,0.95)';
+    hud.fillRect(px - 2, py - 2, 4, 4);
+  }
+  // Máy bay ở tâm
+  hud.fillStyle = HUD_COLOR;
+  hud.beginPath();
+  hud.moveTo(cx, cy - 5); hud.lineTo(cx - 4, cy + 4); hud.lineTo(cx + 4, cy + 4);
+  hud.closePath(); hud.fill();
+  hud.restore();
 }
 
 // ===========================================================================
@@ -599,16 +1219,14 @@ function updateCamera(dt) {
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-document.body.appendChild(renderer.domElement);
+document.body.insertBefore(renderer.domElement, hudCanvas);
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  resizeHud();
 });
-
-const dbgSpeed = document.getElementById('dbgSpeed');
-const dbgAlt = document.getElementById('dbgAlt');
 
 let accumulator = 0, lastTime = performance.now(), elapsed = 0;
 function frame(now) {
@@ -621,16 +1239,46 @@ function frame(now) {
   while (accumulator >= CFG.DT) {
     updateInput(CFG.DT);
     stepFlight(CFG.DT);
+    stepTargets(CFG.DT, elapsed);
+    Guns.step(CFG.DT);
+    Missiles.step(CFG.DT);
+    FX.step(CFG.DT);
+    Particles.step(CFG.DT);
     accumulator -= CFG.DT;
   }
   updateCamera(frameDt);
   water.update(elapsed);
+  AudioSys.engineUpdate(plane.throttle, plane.speed);
 
-  dbgSpeed.textContent = plane.speed.toFixed(0);
-  dbgAlt.textContent = plane.pos.y.toFixed(0);
   renderer.render(scene, camera);
+  drawHud();
 }
 requestAnimationFrame(frame);
+
+// Hook debug cho test tự động: ghi trạng thái vào DOM attribute mỗi 0.25s
+// (tool tự động chạy ở isolated world, không đọc được biến của module)
+let dbgMaxLock = 0, dbgEverLocked = false;
+const AUTOTEST = new URLSearchParams(location.search).has('autotest');
+setInterval(() => {
+  dbgMaxLock = Math.max(dbgMaxLock, Missiles.state.lockTimer);
+  dbgEverLocked = dbgEverLocked || Missiles.state.locked;
+  if (AUTOTEST && Missiles.state.locked && Missiles.state.ammo === CFG.MISSILE_COUNT) {
+    Missiles.fire(); // tự bắn 1 quả khi khóa xong (chỉ khi ?autotest)
+  }
+  hudCanvas.dataset.dbg = JSON.stringify({
+    maxLock: +dbgMaxLock.toFixed(2), everLocked: dbgEverLocked,
+    kills: killCount,
+    ammo: Missiles.state.ammo,
+    locked: Missiles.state.locked,
+    lockTimer: +Missiles.state.lockTimer.toFixed(2),
+    heat: +Guns.state.heat.toFixed(2),
+    overheated: Guns.state.overheated,
+    hp: plane.hp,
+    speed: Math.round(plane.speed),
+    pos: plane.pos.toArray().map(Math.round),
+    targetsAlive: targets.filter(t => t.alive).length,
+  });
+}, 250);
 </script>
 </body>
 </html>

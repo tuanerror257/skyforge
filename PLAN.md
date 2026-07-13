@@ -15,7 +15,7 @@ Game không chiến 3D arcade chạy trên trình duyệt. Một file `index.htm
 
 **Mốc:** mở link Vercel thấy trang Skyforge.
 
-## Phase 1 — Máy bay bay được (v0.1.0)
+## Phase 1 — Máy bay bay được (v0.1.0) ✅
 - Skeleton kiến trúc: comment đầu file, chia section rõ ràng
 - Fixed timestep 60Hz tách khỏi render loop
 - Mô hình bay arcade: vận tốc theo vector mũi, ga 40–180 u/s, W/S/A/D/Q/E với input làm mượt, tốc độ <60 thì mũi tự chúc xuống, chạm đất/trần nảy lại
@@ -25,7 +25,7 @@ Game không chiến 3D arcade chạy trên trình duyệt. Một file `index.htm
 
 **Mốc:** bay lượn quanh thế giới tạm, cảm giác điều khiển ổn.
 
-## Phase 2 — Thế giới (v0.2.0)
+## Phase 2 — Thế giới (v0.2.0) ✅
 - Terrain 8000×8000, simplex noise, 3 vùng pha trộn: núi (đá xám→tuyết, đỉnh 600), hoang mạc (đụn cát vàng + cột đá), biển + đảo (sóng nhẹ, cát→cây xanh)
 - Một BufferGeometry duy nhất, vertex color, flat shading
 - Mây low-poly instanced, biên mềm 8000×8000 đẩy người chơi lại
@@ -34,7 +34,7 @@ Game không chiến 3D arcade chạy trên trình duyệt. Một file `index.htm
 
 **Mốc:** bay ngắm cảnh 3 vùng địa hình, đổi 2 góc nhìn, giữ 60fps.
 
-## Phase 3 — Vũ khí + HUD (v0.3.0)
+## Phase 3 — Vũ khí + HUD (v0.3.0) ✅
 - Pháo: 900 rpm, đạn bay thật (không hitscan), quá nhiệt 3s bắn / 2s nghỉ
 - Tên lửa: 4 quả, khóa mục tiêu 1.5s (<1500u), bay bám giới hạn góc lượn, vệt khói, nổ gần
 - HUD Canvas2D: thước tốc độ / độ cao / hướng, vòng ngắm + chỉ báo đón đầu, ô khóa mục tiêu, thanh ga / đạn / quá nhiệt / máu, đếm kill, radar mini
