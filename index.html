@@ -6,7 +6,7 @@
 <title>Skyforge</title>
 <!--
   ============================================================================
-  SKYFORGE — game không chiến 3D arcade (Phase 1: mô hình bay)
+  SKYFORGE — game không chiến 3D arcade (Phase 2: thế giới)
   ============================================================================
 
   KIẾN TRÚC
@@ -14,24 +14,24 @@
   Một file duy nhất, Three.js qua CDN importmap. Code chia section:
 
     [CONFIG]   — mọi hằng số gameplay gom một chỗ để dễ cân chỉnh
+    [NOISE]    — simplex noise 2D + fbm cho terrain
     [INPUT]    — bàn phím thô -> trục điều khiển đã làm mượt (-1..1)
-    [WORLD]    — scene, ánh sáng, skybox gradient, fog, mặt đất tạm
-    [PLANE]    — dựng tiêm kích low-poly từ primitive
-    [FLIGHT]   — mô hình bay arcade, chạy ở fixed timestep 60Hz
-    [CAMERA]   — camera bám đuôi với độ trễ lò xo
-    [LOOP]     — vòng lặp chính: tích lũy thời gian, step 60Hz cố định,
-                 render theo refresh rate, nội suy không cần thiết vì
-                 step nhỏ (16.67ms) — render đọc state mới nhất
+    [WORLD]    — scene, ánh sáng, skybox gradient, fog
+    [TERRAIN]  — heightmap 3 vùng (núi/hoang mạc/biển) trộn bằng noise,
+                 một BufferGeometry duy nhất + vertex color, flat shading.
+                 heightAt(x,z) dùng chung cho sinh terrain VÀ va chạm.
+    [SCENERY]  — mặt biển sóng, cột đá hoang mạc, mây instanced
+    [PLANE]    — tiêm kích low-poly + afterburner + khói đầu cánh
+    [FLIGHT]   — mô hình bay arcade, fixed timestep 60Hz, biên mềm
+    [CAMERA]   — 2 chế độ (phím C): bám đuôi lò xo / buồng lái
+    [LOOP]     — tích lũy thời gian, step 60Hz cố định, render theo màn hình
 
   MÔ HÌNH BAY (arcade, không mô phỏng)
   ------------------------------------
-  - Máy bay có quaternion hướng; vận tốc LUÔN dọc theo vector mũi.
-  - Độ lớn vận tốc do ga quyết định (THROTTLE_MIN..MAX), tiến về
-    tốc độ mục tiêu với hằng số thời gian riêng.
-  - Input xoay (pitch/roll/yaw) được làm mượt (lerp về giá trị đích)
-    rồi nhân trực tiếp với tốc độ xoay tối đa.
-  - Dưới STALL_SPEED: mũi bị kéo chúc xuống nhẹ (nose drop).
-  - Chạm đất/trần: đẩy lại + giảm tốc, chưa có phá hủy ở v1.
+  - Vận tốc LUÔN dọc vector mũi, độ lớn do ga quyết định (40..180).
+  - Input xoay làm mượt rồi nhân tốc độ xoay tối đa.
+  - Dưới 60 đơn vị/s: mũi bị kéo chúc xuống nhẹ.
+  - Chạm địa hình/trần: đẩy lại + giảm tốc. Biên 8000x8000 đẩy mềm về tâm.
   ============================================================================
 -->
 <style>
@@ -43,14 +43,41 @@
     color: rgba(255,255,255,.85); text-shadow: 0 1px 3px rgba(0,0,0,.6);
     user-select: none; pointer-events: none; line-height: 1.5;
   }
+  /* Khung kính buồng lái — chỉ hiện ở chế độ cockpit */
+  #cockpitFrame { position: fixed; inset: 0; pointer-events: none; display: none; }
+  #cockpitFrame .strut {
+    position: absolute; background: linear-gradient(#3a4450, #232a33);
+    box-shadow: 0 0 12px rgba(0,0,0,.7);
+  }
+  #cockpitFrame .left  { left: 0;  top: 0; width: 7%;  height: 100%;
+    transform: skewX(-9deg) translateX(-28%); }
+  #cockpitFrame .right { right: 0; top: 0; width: 7%;  height: 100%;
+    transform: skewX(9deg) translateX(28%); }
+  #cockpitFrame .top   { left: 0;  top: 0; width: 100%; height: 5%;
+    border-radius: 0 0 45% 45%; }
+  #cockpitFrame .dash  { left: 0; bottom: 0; width: 100%; height: 13%;
+    border-radius: 38% 38% 0 0; background: linear-gradient(#2b323c, #171c22); }
 </style>
+<script>
+// Hiện lỗi runtime lên màn hình (module error đôi khi không lộ ra console)
+addEventListener('error', e => {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:8px;left:8px;z-index:99;color:#f66;font:12px monospace;background:rgba(0,0,0,.8);padding:6px;white-space:pre-wrap;';
+  d.textContent = 'ERROR: ' + e.message + '\n' + (e.filename || '') + ':' + e.lineno;
+  document.body.appendChild(d);
+});
+</script>
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 </head>
 <body>
+<div id="cockpitFrame">
+  <div class="strut top"></div><div class="strut left"></div>
+  <div class="strut right"></div><div class="strut dash"></div>
+</div>
 <div id="info">
-  W/S chúc-ngóc · A/D roll · Q/E yaw · Shift/Ctrl ga<br>
+  W/S chúc-ngóc · A/D roll · Q/E yaw · Shift/Ctrl ga · C đổi góc nhìn<br>
   Tốc độ: <span id="dbgSpeed">0</span> · Độ cao: <span id="dbgAlt">0</span>
 </div>
 <script type="module">
@@ -61,43 +88,87 @@ import * as THREE from 'three';
 // ===========================================================================
 const CFG = {
   // Ga & tốc độ (đơn vị/giây)
-  THROTTLE_MIN: 40,
-  THROTTLE_MAX: 180,
-  THROTTLE_RATE: 0.45,      // tốc độ chỉnh ga (phần trăm dải/giây)
-  SPEED_RESPONSE: 1.2,      // hằng số tiến về tốc độ mục tiêu (1/s)
-  STALL_SPEED: 60,
-  STALL_PITCH: 0.35,        // rad/s kéo mũi xuống khi stall (tối đa)
+  THROTTLE_MIN: 40, THROTTLE_MAX: 180,
+  THROTTLE_RATE: 0.45, SPEED_RESPONSE: 1.2,
+  STALL_SPEED: 60, STALL_PITCH: 0.35,
 
   // Tốc độ xoay tối đa (rad/s)
-  PITCH_RATE: 1.6,
-  ROLL_RATE: 2.6,
-  YAW_RATE: 0.7,
-  INPUT_SMOOTH: 8,          // lerp input (1/s) — cao = nhạy hơn
+  PITCH_RATE: 1.6, ROLL_RATE: 2.6, YAW_RATE: 0.7,
+  INPUT_SMOOTH: 8,
 
-  // Giới hạn thế giới
-  GROUND_Y: 2,              // độ cao tối thiểu (tâm máy bay)
+  // Thế giới
+  WORLD_SIZE: 8000,
+  BORDER_SOFT: 3600,        // bắt đầu đẩy mềm từ bán kính này
+  CLEARANCE: 4,             // độ hở tối thiểu trên địa hình
   CEILING_Y: 1400,
 
-  // Camera đuôi
-  CAM_BACK: 22, CAM_UP: 7,  // offset phía sau/trên máy bay
-  CAM_STIFF: 3.5,           // độ cứng lò xo (1/s) — thấp = trễ nhiều
-  CAM_LOOK_AHEAD: 30,       // nhìn về điểm trước mũi
+  // Camera
+  CAM_BACK: 22, CAM_UP: 7, CAM_STIFF: 3.5, CAM_LOOK_AHEAD: 30,
 
-  DT: 1 / 60,               // fixed timestep
+  DT: 1 / 60,
 };
 
 // ===========================================================================
-// [INPUT] — bàn phím -> trục làm mượt
+// [NOISE] — simplex noise 2D (Stefan Gustavson, public domain) + fbm
+// ===========================================================================
+const Simplex = (() => {
+  const grad = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+  const p = new Uint8Array(512);
+  // PRNG cố định để thế giới luôn giống nhau giữa các lần chơi
+  let seed = 1337;
+  const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const perm = Array.from({ length: 256 }, (_, i) => i);
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [perm[i], perm[j]] = [perm[j], perm[i]];
+  }
+  for (let i = 0; i < 512; i++) p[i] = perm[i & 255];
+
+  const F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
+  function noise(xin, yin) {
+    const s = (xin + yin) * F2;
+    const i = Math.floor(xin + s), j = Math.floor(yin + s);
+    const t = (i + j) * G2;
+    const x0 = xin - (i - t), y0 = yin - (j - t);
+    const i1 = x0 > y0 ? 1 : 0, j1 = x0 > y0 ? 0 : 1;
+    const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+    const x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+    const ii = i & 255, jj = j & 255;
+    let n = 0;
+    let t0 = 0.5 - x0 * x0 - y0 * y0;
+    if (t0 > 0) { const g = grad[p[ii + p[jj]] % 8]; t0 *= t0; n += t0 * t0 * (g[0] * x0 + g[1] * y0); }
+    let t1 = 0.5 - x1 * x1 - y1 * y1;
+    if (t1 > 0) { const g = grad[p[ii + i1 + p[jj + j1]] % 8]; t1 *= t1; n += t1 * t1 * (g[0] * x1 + g[1] * y1); }
+    let t2 = 0.5 - x2 * x2 - y2 * y2;
+    if (t2 > 0) { const g = grad[p[ii + 1 + p[jj + 1]] % 8]; t2 *= t2; n += t2 * t2 * (g[0] * x2 + g[1] * y2); }
+    return 70 * n; // ~[-1, 1]
+  }
+  return { noise };
+})();
+
+function fbm(x, y, octaves = 4, lac = 2, gain = 0.5) {
+  let amp = 1, freq = 1, sum = 0, norm = 0;
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * Simplex.noise(x * freq, y * freq);
+    norm += amp; amp *= gain; freq *= lac;
+  }
+  return sum / norm;
+}
+
+// ===========================================================================
+// [INPUT]
 // ===========================================================================
 const keys = {};
-addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'Space') e.preventDefault(); });
-addEventListener('keyup',   e => { keys[e.code] = false; });
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'KeyC' && !e.repeat) toggleCamera();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
 
-// Trục đã làm mượt, đọc bởi [FLIGHT]
 const input = { pitch: 0, roll: 0, yaw: 0 };
-
 function updateInput(dt) {
-  const tPitch = (keys['KeyS'] ? 1 : 0) - (keys['KeyW'] ? 1 : 0); // S ngóc, W chúc
+  const tPitch = (keys['KeyS'] ? 1 : 0) - (keys['KeyW'] ? 1 : 0);
   const tRoll  = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0);
   const tYaw   = (keys['KeyQ'] ? 1 : 0) - (keys['KeyE'] ? 1 : 0);
   const k = Math.min(1, CFG.INPUT_SMOOTH * dt);
@@ -107,69 +178,199 @@ function updateInput(dt) {
 }
 
 // ===========================================================================
-// [WORLD] — scene, sky, fog, mặt đất tạm
+// [WORLD] — scene, sky, fog, ánh sáng
 // ===========================================================================
 const scene = new THREE.Scene();
 
-// Skybox gradient: chân trời ấm -> đỉnh trời xanh đậm (shader trên sphere lớn)
-const skyGeo = new THREE.SphereGeometry(6000, 24, 12);
-const skyMat = new THREE.ShaderMaterial({
-  side: THREE.BackSide, depthWrite: false,
-  uniforms: {
-    topColor:     { value: new THREE.Color(0x14356e) },
-    horizonColor: { value: new THREE.Color(0xf2b46a) },
-  },
-  vertexShader: `
-    varying vec3 vDir;
-    void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: `
-    uniform vec3 topColor; uniform vec3 horizonColor;
-    varying vec3 vDir;
-    void main() {
-      float h = clamp(vDir.y, 0.0, 1.0);
-      gl_FragColor = vec4(mix(horizonColor, topColor, pow(h, 0.55)), 1.0);
-    }`,
-});
-const sky = new THREE.Mesh(skyGeo, skyMat);
+const HORIZON = new THREE.Color(0xf2b46a), ZENITH = new THREE.Color(0x14356e);
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(7000, 24, 12),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { topColor: { value: ZENITH }, horizonColor: { value: HORIZON } },
+    vertexShader: `varying vec3 vDir;
+      void main(){ vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `uniform vec3 topColor, horizonColor; varying vec3 vDir;
+      void main(){ float h = clamp(vDir.y, 0.0, 1.0);
+        gl_FragColor = vec4(mix(horizonColor, topColor, pow(h, 0.55)), 1.0); }`,
+  }));
 scene.add(sky);
+scene.fog = new THREE.Fog(HORIZON, 900, 5600);
 
-scene.fog = new THREE.Fog(0xf2b46a, 800, 5200); // fog khớp màu chân trời
-
-const sun = new THREE.DirectionalLight(0xfff2d9, 2.2);
+const sun = new THREE.DirectionalLight(0xfff2d9, 2.0);
 sun.position.set(0.5, 1, 0.3);
-scene.add(sun, new THREE.HemisphereLight(0x9ec8ff, 0xc9a06a, 0.9));
+scene.add(sun, new THREE.HemisphereLight(0x9ec8ff, 0xc9a06a, 0.8));
 
-// Mặt đất tạm (Phase 2 thay bằng terrain thật): plane màu + lưới tham chiếu
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(9000, 9000),
-  new THREE.MeshLambertMaterial({ color: 0x6d8f5a })
-);
-ground.rotation.x = -Math.PI / 2;
-scene.add(ground);
-const grid = new THREE.GridHelper(9000, 90, 0x3d5c34, 0x50713f);
-grid.position.y = 0.5;
-scene.add(grid);
+// ===========================================================================
+// [TERRAIN] — 3 vùng trộn noise, một BufferGeometry, vertex color
+//
+// Bố cục vùng do noise tần số rất thấp quyết định (biome ~ [-1,1]):
+//   biome >  0.18 -> NÚI       (đá xám -> tuyết, đỉnh tới ~600)
+//   biome < -0.18 -> BIỂN/ĐẢO  (đáy dưới mực nước, đảo nhô lên)
+//   ở giữa        -> HOANG MẠC (đụn cát thoải vàng)
+// Vùng chuyển tiếp trộn mượt bằng smoothstep để không có vách đứng.
+// Mực nước biển = y 0.
+// ===========================================================================
+const T = { SIZE: CFG.WORLD_SIZE, SEGS: 170 };
 
-// Vài khối hộp rải rác để cảm nhận tốc độ/độ cao
-{
-  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  const boxMat = new THREE.MeshLambertMaterial({ color: 0x8a7f6a });
-  const boxes = new THREE.InstancedMesh(boxGeo, boxMat, 200);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
-  for (let i = 0; i < 200; i++) {
-    const h = 20 + Math.random() * 120;
-    s.set(15 + Math.random() * 40, h, 15 + Math.random() * 40);
-    m.compose(
-      new THREE.Vector3((Math.random() - .5) * 8000, h / 2, (Math.random() - .5) * 8000),
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI), s);
-    boxes.setMatrixAt(i, m);
+function smoothstep(a, b, x) {
+  const t = THREE.MathUtils.clamp((x - a) / (b - a), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
+// Trọng số 3 vùng tại (x,z) — luôn cộng lại bằng 1
+function biomeWeights(x, z) {
+  const b = fbm(x * 0.00011 + 5.2, z * 0.00011 - 3.7, 3);
+  const wMtn = smoothstep(0.10, 0.30, b);
+  const wSea = smoothstep(0.10, 0.30, -b);
+  return { wMtn, wSea, wDes: 1 - wMtn - wSea };
+}
+
+function heightAt(x, z) {
+  const { wMtn, wSea, wDes } = biomeWeights(x, z);
+  let h = 0;
+  if (wMtn > 0.001) {
+    // Núi: fbm "ridged" — gấp giá trị tuyệt đối cho sống núi sắc
+    const r = 1 - Math.abs(fbm(x * 0.0009, z * 0.0009, 5));
+    h += wMtn * (40 + Math.pow(r, 2.2) * 620);
   }
-  scene.add(boxes);
+  if (wDes > 0.001) {
+    // Hoang mạc: đụn thoải, sóng cát dài
+    const d = fbm(x * 0.0016, z * 0.0016, 3) * 18
+            + Math.sin(x * 0.004 + fbm(x * 0.0007, z * 0.0007, 2) * 6) * 9;
+    h += wDes * (26 + d);
+  }
+  if (wSea > 0.001) {
+    // Biển: nền -28; đảo = bump noise vượt ngưỡng nhô lên tới ~45
+    const isl = fbm(x * 0.0013 + 40, z * 0.0013 - 40, 4);
+    const island = Math.max(0, isl - 0.35) * 220;
+    h += wSea * (-28 + island);
+  }
+  return h;
+}
+
+// Màu vertex theo vùng + độ cao
+const _c = new THREE.Color();
+const COL = {
+  rock: new THREE.Color(0x7d7f84), rockDark: new THREE.Color(0x5a5c60),
+  snow: new THREE.Color(0xeff3f6),
+  sand: new THREE.Color(0xd9b36c), sandDark: new THREE.Color(0xc09a52),
+  beach: new THREE.Color(0xe8d29a), green: new THREE.Color(0x4e8f46),
+  seabed: new THREE.Color(0x3d6b7a),
+};
+function colorAt(x, z, h) {
+  const { wMtn, wSea } = biomeWeights(x, z);
+  const jitter = fbm(x * 0.008, z * 0.008, 2) * 0.5 + 0.5; // biến thiên nhỏ
+  // Núi: đá -> tuyết theo độ cao
+  const mtn = COL.rockDark.clone().lerp(COL.rock, jitter)
+    .lerp(COL.snow, smoothstep(330, 480, h));
+  // Hoang mạc: hai tông cát
+  const des = COL.sandDark.clone().lerp(COL.sand, jitter);
+  // Biển: đáy -> bãi cát (quanh mực nước) -> xanh cây (cao hơn 8)
+  const sea = COL.seabed.clone()
+    .lerp(COL.beach, smoothstep(-14, 2, h))
+    .lerp(COL.green, smoothstep(8, 26, h));
+  const wDes = 1 - wMtn - wSea;
+  _c.setRGB(
+    mtn.r * wMtn + des.r * wDes + sea.r * wSea,
+    mtn.g * wMtn + des.g * wDes + sea.g * wSea,
+    mtn.b * wMtn + des.b * wDes + sea.b * wSea);
+  return _c;
+}
+
+function buildTerrain() {
+  const geo = new THREE.PlaneGeometry(T.SIZE, T.SIZE, T.SEGS, T.SEGS);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    const h = heightAt(x, z);
+    pos.setY(i, h);
+    const c = colorAt(x, z, h);
+    colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  return new THREE.Mesh(geo, mat);
+}
+scene.add(buildTerrain());
+
+// ===========================================================================
+// [SCENERY] — biển, cột đá, mây
+// ===========================================================================
+
+// Mặt biển: plane thấp phân giải, sóng sin CPU mỗi frame
+const water = (() => {
+  const geo = new THREE.PlaneGeometry(T.SIZE, T.SIZE, 56, 56);
+  geo.rotateX(-Math.PI / 2);
+  const mat = new THREE.MeshPhongMaterial({
+    color: 0x2b6f9e, shininess: 120, specular: 0x88bbdd,
+    transparent: true, opacity: 0.9,
+  });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.y = 0;
+  scene.add(mesh);
+  const base = geo.attributes.position.array.slice();
+  return {
+    mesh,
+    update(t) {
+      const p = geo.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        const x = base[i * 3], z = base[i * 3 + 2];
+        p.setY(i, Math.sin(x * 0.008 + t * 1.1) * 1.6 + Math.cos(z * 0.011 + t * 0.8) * 1.3);
+      }
+      p.needsUpdate = true;
+    },
+  };
+})();
+
+// Cột đá hoang mạc: instanced cylinder, chỉ đặt nơi wDes cao
+{
+  const geo = new THREE.CylinderGeometry(1, 1.5, 1, 6);
+  const mat = new THREE.MeshLambertMaterial({ color: 0xb98a54, flatShading: true });
+  const COUNT = 90;
+  const inst = new THREE.InstancedMesh(geo, mat, COUNT);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+  let placed = 0, tries = 0;
+  while (placed < COUNT && tries++ < 3000) {
+    const x = (Math.random() - .5) * T.SIZE * 0.95;
+    const z = (Math.random() - .5) * T.SIZE * 0.95;
+    if (biomeWeights(x, z).wDes < 0.8) continue;
+    const h = 35 + Math.random() * 75, r = 6 + Math.random() * 12;
+    s.set(r, h, r);
+    m.compose(new THREE.Vector3(x, heightAt(x, z) + h / 2 - 4, z),
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI), s);
+    inst.setMatrixAt(placed++, m);
+  }
+  inst.count = placed;
+  scene.add(inst);
+}
+
+// Mây low-poly instanced
+{
+  const geo = new THREE.IcosahedronGeometry(1, 0);
+  const mat = new THREE.MeshLambertMaterial({
+    color: 0xffffff, flatShading: true, transparent: true, opacity: 0.85,
+  });
+  const COUNT = 70;
+  const inst = new THREE.InstancedMesh(geo, mat, COUNT);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+  for (let i = 0; i < COUNT; i++) {
+    s.set(60 + Math.random() * 130, 18 + Math.random() * 26, 45 + Math.random() * 90);
+    m.compose(
+      new THREE.Vector3((Math.random() - .5) * T.SIZE, 550 + Math.random() * 380, (Math.random() - .5) * T.SIZE),
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI), s);
+    inst.setMatrixAt(i, m);
+  }
+  scene.add(inst);
 }
 
 // ===========================================================================
-// [PLANE] — tiêm kích low-poly từ primitive
-// Quy ước: mũi máy bay hướng -Z (chuẩn "forward" của Three.js)
+// [PLANE] — tiêm kích low-poly + afterburner + khói đầu cánh
+// Quy ước: mũi hướng -Z
 // ===========================================================================
 function buildPlane() {
   const g = new THREE.Group();
@@ -177,58 +378,116 @@ function buildPlane() {
   const darkMat  = new THREE.MeshStandardMaterial({ color: 0x51606f, flatShading: true, metalness: .3, roughness: .7 });
   const glassMat = new THREE.MeshStandardMaterial({ color: 0x2c4a6e, flatShading: true, metalness: .8, roughness: .15 });
 
-  // Thân thuôn: 2 nón nối lưng nhau
   const nose = new THREE.Mesh(new THREE.ConeGeometry(1.1, 5, 8), bodyMat);
   nose.rotation.x = -Math.PI / 2; nose.position.z = -4;
   const tail = new THREE.Mesh(new THREE.ConeGeometry(1.1, 7, 8), bodyMat);
-  tail.rotation.x =  Math.PI / 2; tail.position.z = 2;
+  tail.rotation.x = Math.PI / 2; tail.position.z = 2;
   g.add(nose, tail);
 
-  // Kính buồng lái
   const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.85, 8, 6), glassMat);
   canopy.scale.set(0.9, 0.8, 1.8); canopy.position.set(0, 0.75, -2.2);
   g.add(canopy);
 
-  // Cánh delta (tam giác extrude mỏng)
   const wingShape = new THREE.Shape();
   wingShape.moveTo(0, -3.2); wingShape.lineTo(7, 2.6); wingShape.lineTo(0, 2.6); wingShape.closePath();
   const wingGeo = new THREE.ExtrudeGeometry(wingShape, { depth: 0.18, bevelEnabled: false });
-  wingGeo.rotateX(Math.PI / 2); // shape (x,y) -> mặt phẳng (x,z)
+  wingGeo.rotateX(Math.PI / 2);
   const wingR = new THREE.Mesh(wingGeo, darkMat);
   const wingL = new THREE.Mesh(wingGeo, darkMat);
   wingL.scale.x = -1;
   g.add(wingR, wingL);
 
-  // Hai cánh đuôi đứng chữ V
   const finShape = new THREE.Shape();
   finShape.moveTo(0, 0); finShape.lineTo(2.4, 0); finShape.lineTo(2.0, 2.2); finShape.lineTo(1.2, 2.2); finShape.closePath();
   const finGeo = new THREE.ExtrudeGeometry(finShape, { depth: 0.15, bevelEnabled: false });
-  finGeo.rotateY(Math.PI / 2); // dựng đứng, dọc theo Z
+  finGeo.rotateY(Math.PI / 2);
   for (const sx of [-1, 1]) {
     const fin = new THREE.Mesh(finGeo, darkMat);
     fin.position.set(sx * 1.0, 0.3, 2.2);
-    fin.rotation.z = -sx * 0.35; // ngả ra ngoài
+    fin.rotation.z = -sx * 0.35;
     g.add(fin);
   }
+
+  // Afterburner: nón phát sáng sau đuôi, scale theo ga
+  const abMat = new THREE.MeshBasicMaterial({
+    color: 0xff9a33, transparent: true, opacity: 0.9,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+  // Nón mặc định chĩa +Y; xoay +90° quanh X để mũi nón chĩa +Z (ra sau đuôi)
+  const ab = new THREE.Mesh(new THREE.ConeGeometry(0.7, 4, 8), abMat);
+  ab.rotation.x = Math.PI / 2;
+  ab.position.z = 7.5;
+  g.add(ab);
+  g.userData.afterburner = ab;
+
   return g;
 }
-
 const planeMesh = buildPlane();
 scene.add(planeMesh);
 
+// --- Khói đầu cánh khi quẹo gấp: pool hạt Points với shader fade theo tuổi ---
+const trails = (() => {
+  const MAX = 500;
+  const positions = new Float32Array(MAX * 3);
+  const ages = new Float32Array(MAX).fill(99); // >LIFE nghĩa là "chết"
+  const LIFE = 0.9;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('age', new THREE.BufferAttribute(ages, 1));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    uniforms: {},
+    vertexShader: `
+      attribute float age; varying float vA;
+      void main() {
+        vA = 1.0 - clamp(age / ${LIFE}, 0.0, 1.0);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = (2.0 + (1.0 - vA) * 9.0) * (300.0 / -mv.z);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      varying float vA;
+      void main() {
+        float d = length(gl_PointCoord - 0.5);
+        if (d > 0.5) discard;
+        gl_FragColor = vec4(1.0, 1.0, 1.0, vA * 0.35 * (1.0 - d * 2.0));
+      }`,
+  });
+  const points = new THREE.Points(geo, mat);
+  points.frustumCulled = false;
+  scene.add(points);
+
+  let head = 0;
+  const tipL = new THREE.Vector3(), tipR = new THREE.Vector3();
+  return {
+    step(dt, plane, turnIntensity) {
+      for (let i = 0; i < MAX; i++) ages[i] += dt;
+      // Sinh hạt ở hai đầu cánh khi quẹo đủ gắt và đủ nhanh
+      if (turnIntensity > 0.55 && plane.speed > 95) {
+        tipL.set(-7, 0, 2.6).applyQuaternion(plane.quat).add(plane.pos);
+        tipR.set(7, 0, 2.6).applyQuaternion(plane.quat).add(plane.pos);
+        for (const tip of [tipL, tipR]) {
+          positions[head * 3] = tip.x; positions[head * 3 + 1] = tip.y; positions[head * 3 + 2] = tip.z;
+          ages[head] = 0;
+          head = (head + 1) % MAX;
+        }
+      }
+      geo.attributes.position.needsUpdate = true;
+      geo.attributes.age.needsUpdate = true;
+    },
+  };
+})();
+
 // ===========================================================================
-// [FLIGHT] — trạng thái + mô hình bay arcade (fixed 60Hz)
+// [FLIGHT] — trạng thái + mô hình bay arcade + biên mềm
 // ===========================================================================
 const plane = {
-  pos: new THREE.Vector3(0, 200, 0),
+  pos: new THREE.Vector3(0, 260, 1200),
   quat: new THREE.Quaternion(),
-  speed: 90,
-  throttle: 0.4,            // 0..1
+  speed: 90, throttle: 0.4,
 };
 
-const _fwd = new THREE.Vector3();
-const _dq = new THREE.Quaternion();
-const _axis = new THREE.Vector3();
+const _fwd = new THREE.Vector3(), _dq = new THREE.Quaternion(), _axis = new THREE.Vector3();
 
 function stepFlight(dt) {
   // --- Ga ---
@@ -236,12 +495,10 @@ function stepFlight(dt) {
   if (keys['ControlLeft'] || keys['ControlRight']) plane.throttle -= CFG.THROTTLE_RATE * dt;
   plane.throttle = THREE.MathUtils.clamp(plane.throttle, 0, 1);
 
-  // --- Tốc độ tiến về mục tiêu theo ga ---
   const targetSpeed = CFG.THROTTLE_MIN + plane.throttle * (CFG.THROTTLE_MAX - CFG.THROTTLE_MIN);
   plane.speed += (targetSpeed - plane.speed) * Math.min(1, CFG.SPEED_RESPONSE * dt);
 
-  // --- Xoay theo input (trục cục bộ của máy bay) ---
-  // pitch quanh X, yaw quanh Y, roll quanh Z
+  // --- Xoay quanh trục cục bộ ---
   _dq.setFromAxisAngle(_axis.set(1, 0, 0), input.pitch * CFG.PITCH_RATE * dt);
   plane.quat.multiply(_dq);
   _dq.setFromAxisAngle(_axis.set(0, 1, 0), input.yaw * CFG.YAW_RATE * dt);
@@ -249,62 +506,95 @@ function stepFlight(dt) {
   _dq.setFromAxisAngle(_axis.set(0, 0, 1), input.roll * CFG.ROLL_RATE * dt);
   plane.quat.multiply(_dq);
 
-  // --- Stall: dưới ngưỡng thì mũi bị kéo chúc xuống (quanh trục X thế giới-hóa) ---
+  // --- Stall ---
   if (plane.speed < CFG.STALL_SPEED) {
-    const severity = 1 - plane.speed / CFG.STALL_SPEED; // 0..1
+    const severity = 1 - plane.speed / CFG.STALL_SPEED;
     _dq.setFromAxisAngle(_axis.set(1, 0, 0), severity * CFG.STALL_PITCH * dt);
     plane.quat.multiply(_dq);
   }
+
+  // --- Biên mềm: ngoài bán kính BORDER_SOFT thì lái dần về tâm ---
+  const distXZ = Math.hypot(plane.pos.x, plane.pos.z);
+  if (distXZ > CFG.BORDER_SOFT) {
+    const over = Math.min(1, (distXZ - CFG.BORDER_SOFT) / 400);
+    // Xoay quaternion về hướng nhìn vào tâm, mạnh dần theo mức vượt biên
+    _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+    const toCenter = _axis.set(-plane.pos.x, 0, -plane.pos.z).normalize();
+    const target = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), toCenter);
+    plane.quat.slerp(target, over * 0.9 * dt);
+  }
   plane.quat.normalize();
 
-  // --- Di chuyển dọc vector mũi ---
+  // --- Di chuyển dọc mũi ---
   _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
   plane.pos.addScaledVector(_fwd, plane.speed * dt);
 
-  // --- Chạm đất/trần: nảy lại + giảm tốc ---
-  if (plane.pos.y < CFG.GROUND_Y) { plane.pos.y = CFG.GROUND_Y; plane.speed *= 0.85; bounceNoseUp(); }
+  // --- Va chạm địa hình (và mặt nước) / trần ---
+  const floor = Math.max(heightAt(plane.pos.x, plane.pos.z), 0) + CFG.CLEARANCE;
+  if (plane.pos.y < floor) {
+    plane.pos.y = floor;
+    plane.speed *= 0.85;
+    _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+    if (_fwd.y < 0.15) { // ép mũi ngóc nhẹ để "nảy" ra
+      _dq.setFromAxisAngle(_axis.set(1, 0, 0), -0.06);
+      plane.quat.multiply(_dq);
+    }
+  }
   if (plane.pos.y > CFG.CEILING_Y) plane.pos.y = CFG.CEILING_Y;
 
   planeMesh.position.copy(plane.pos);
   planeMesh.quaternion.copy(plane.quat);
-}
 
-// Chạm đất: ép mũi ngóc nhẹ lên để "nảy" ra
-function bounceNoseUp() {
-  _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
-  if (_fwd.y < 0.15) {
-    _dq.setFromAxisAngle(_axis.set(1, 0, 0), -0.06);
-    plane.quat.multiply(_dq);
-  }
+  // --- Hiệu ứng gắn máy bay ---
+  const ab = planeMesh.userData.afterburner;
+  const flicker = 0.85 + Math.random() * 0.3;
+  ab.scale.set(1, 0.25 + plane.throttle * 1.4 * flicker, 1);
+  ab.material.opacity = 0.25 + plane.throttle * 0.7;
+
+  const turnIntensity = Math.max(Math.abs(input.pitch), Math.abs(input.roll));
+  trails.step(dt, plane, turnIntensity);
 }
 
 // ===========================================================================
-// [CAMERA] — bám đuôi với độ trễ lò xo
-// Vị trí camera lerp về điểm neo sau đuôi => khi quẹo gấp máy bay
-// "văng" khỏi tâm màn hình rồi camera đuổi theo, tạo cảm giác tốc độ.
+// [CAMERA] — 2 chế độ: 0 = bám đuôi lò xo, 1 = buồng lái
 // ===========================================================================
-const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 12000);
-const camPos = new THREE.Vector3(0, 210, 30); // vị trí hiện tại (có trễ)
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 15000);
+const camPos = new THREE.Vector3(0, 270, 1230);
+let camMode = 0;
+const cockpitFrame = document.getElementById('cockpitFrame');
+
+function toggleCamera() {
+  camMode = 1 - camMode;
+  planeMesh.visible = camMode === 0;
+  cockpitFrame.style.display = camMode === 1 ? 'block' : 'none';
+}
+
 const _anchor = new THREE.Vector3(), _lookAt = new THREE.Vector3(), _up = new THREE.Vector3();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 function updateCamera(dt) {
-  // Điểm neo: sau và trên máy bay theo hệ tọa độ máy bay
-  _anchor.set(0, CFG.CAM_UP, CFG.CAM_BACK).applyQuaternion(plane.quat).add(plane.pos);
-  camPos.lerp(_anchor, Math.min(1, CFG.CAM_STIFF * dt));
-
-  // Nhìn về điểm trước mũi; up trộn giữa up máy bay và up thế giới để đỡ chóng mặt
-  _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
-  _lookAt.copy(plane.pos).addScaledVector(_fwd, CFG.CAM_LOOK_AHEAD);
-  _up.set(0, 1, 0).applyQuaternion(plane.quat).lerp(new THREE.Vector3(0, 1, 0), 0.5).normalize();
-
-  camera.position.copy(camPos);
-  camera.up.copy(_up);
-  camera.lookAt(_lookAt);
-  sky.position.copy(camPos); // skybox bám camera
+  if (camMode === 0) {
+    // Bám đuôi có trễ lò xo
+    _anchor.set(0, CFG.CAM_UP, CFG.CAM_BACK).applyQuaternion(plane.quat).add(plane.pos);
+    camPos.lerp(_anchor, Math.min(1, CFG.CAM_STIFF * dt));
+    _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+    _lookAt.copy(plane.pos).addScaledVector(_fwd, CFG.CAM_LOOK_AHEAD);
+    _up.set(0, 1, 0).applyQuaternion(plane.quat).lerp(WORLD_UP, 0.5).normalize();
+    camera.position.copy(camPos);
+    camera.up.copy(_up);
+    camera.lookAt(_lookAt);
+  } else {
+    // Buồng lái: bám cứng vào ghế lái, xoay đúng theo máy bay
+    _anchor.set(0, 1.0, -2.0).applyQuaternion(plane.quat).add(plane.pos);
+    camera.position.copy(_anchor);
+    camera.quaternion.copy(plane.quat);
+    camPos.copy(_anchor); // để lúc đổi lại chase không giật
+  }
+  sky.position.copy(camera.position);
 }
 
 // ===========================================================================
-// [LOOP] — fixed timestep 60Hz tách khỏi render
+// [LOOP]
 // ===========================================================================
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
@@ -320,18 +610,21 @@ addEventListener('resize', () => {
 const dbgSpeed = document.getElementById('dbgSpeed');
 const dbgAlt = document.getElementById('dbgAlt');
 
-let accumulator = 0, lastTime = performance.now();
+let accumulator = 0, lastTime = performance.now(), elapsed = 0;
 function frame(now) {
   requestAnimationFrame(frame);
-  accumulator += Math.min((now - lastTime) / 1000, 0.25); // kẹp khi tab ngủ
+  const frameDt = Math.min((now - lastTime) / 1000, 0.25);
+  accumulator += frameDt;
   lastTime = now;
+  elapsed += frameDt;
 
   while (accumulator >= CFG.DT) {
     updateInput(CFG.DT);
     stepFlight(CFG.DT);
     accumulator -= CFG.DT;
   }
-  updateCamera(Math.min((now - lastTime) / 1000 + CFG.DT, 0.05)); // camera mượt theo frame
+  updateCamera(frameDt);
+  water.update(elapsed);
 
   dbgSpeed.textContent = plane.speed.toFixed(0);
   dbgAlt.textContent = plane.pos.y.toFixed(0);
