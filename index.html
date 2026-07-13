@@ -4,23 +4,340 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Skyforge</title>
+<!--
+  ============================================================================
+  SKYFORGE — game không chiến 3D arcade (Phase 1: mô hình bay)
+  ============================================================================
+
+  KIẾN TRÚC
+  ---------
+  Một file duy nhất, Three.js qua CDN importmap. Code chia section:
+
+    [CONFIG]   — mọi hằng số gameplay gom một chỗ để dễ cân chỉnh
+    [INPUT]    — bàn phím thô -> trục điều khiển đã làm mượt (-1..1)
+    [WORLD]    — scene, ánh sáng, skybox gradient, fog, mặt đất tạm
+    [PLANE]    — dựng tiêm kích low-poly từ primitive
+    [FLIGHT]   — mô hình bay arcade, chạy ở fixed timestep 60Hz
+    [CAMERA]   — camera bám đuôi với độ trễ lò xo
+    [LOOP]     — vòng lặp chính: tích lũy thời gian, step 60Hz cố định,
+                 render theo refresh rate, nội suy không cần thiết vì
+                 step nhỏ (16.67ms) — render đọc state mới nhất
+
+  MÔ HÌNH BAY (arcade, không mô phỏng)
+  ------------------------------------
+  - Máy bay có quaternion hướng; vận tốc LUÔN dọc theo vector mũi.
+  - Độ lớn vận tốc do ga quyết định (THROTTLE_MIN..MAX), tiến về
+    tốc độ mục tiêu với hằng số thời gian riêng.
+  - Input xoay (pitch/roll/yaw) được làm mượt (lerp về giá trị đích)
+    rồi nhân trực tiếp với tốc độ xoay tối đa.
+  - Dưới STALL_SPEED: mũi bị kéo chúc xuống nhẹ (nose drop).
+  - Chạm đất/trần: đẩy lại + giảm tốc, chưa có phá hủy ở v1.
+  ============================================================================
+-->
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; }
-  body {
-    display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(to top, #f5b76b 0%, #7ec8e3 40%, #1a3a6b 100%);
-    font-family: "Courier New", monospace; color: #fff;
-    text-shadow: 0 2px 8px rgba(0,0,0,.4);
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+  canvas { display: block; }
+  #info {
+    position: fixed; left: 12px; bottom: 10px;
+    font-family: "Courier New", monospace; font-size: 13px;
+    color: rgba(255,255,255,.85); text-shadow: 0 1px 3px rgba(0,0,0,.6);
+    user-select: none; pointer-events: none; line-height: 1.5;
   }
-  .title { text-align: center; }
-  h1 { font-size: 64px; letter-spacing: 12px; margin: 0; }
-  p { font-size: 18px; letter-spacing: 4px; opacity: .85; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
 </head>
 <body>
-  <div class="title">
-    <h1>SKYFORGE</h1>
-    <p>PHASE 0 — COMING SOON</p>
-  </div>
+<div id="info">
+  W/S chúc-ngóc · A/D roll · Q/E yaw · Shift/Ctrl ga<br>
+  Tốc độ: <span id="dbgSpeed">0</span> · Độ cao: <span id="dbgAlt">0</span>
+</div>
+<script type="module">
+import * as THREE from 'three';
+
+// ===========================================================================
+// [CONFIG]
+// ===========================================================================
+const CFG = {
+  // Ga & tốc độ (đơn vị/giây)
+  THROTTLE_MIN: 40,
+  THROTTLE_MAX: 180,
+  THROTTLE_RATE: 0.45,      // tốc độ chỉnh ga (phần trăm dải/giây)
+  SPEED_RESPONSE: 1.2,      // hằng số tiến về tốc độ mục tiêu (1/s)
+  STALL_SPEED: 60,
+  STALL_PITCH: 0.35,        // rad/s kéo mũi xuống khi stall (tối đa)
+
+  // Tốc độ xoay tối đa (rad/s)
+  PITCH_RATE: 1.6,
+  ROLL_RATE: 2.6,
+  YAW_RATE: 0.7,
+  INPUT_SMOOTH: 8,          // lerp input (1/s) — cao = nhạy hơn
+
+  // Giới hạn thế giới
+  GROUND_Y: 2,              // độ cao tối thiểu (tâm máy bay)
+  CEILING_Y: 1400,
+
+  // Camera đuôi
+  CAM_BACK: 22, CAM_UP: 7,  // offset phía sau/trên máy bay
+  CAM_STIFF: 3.5,           // độ cứng lò xo (1/s) — thấp = trễ nhiều
+  CAM_LOOK_AHEAD: 30,       // nhìn về điểm trước mũi
+
+  DT: 1 / 60,               // fixed timestep
+};
+
+// ===========================================================================
+// [INPUT] — bàn phím -> trục làm mượt
+// ===========================================================================
+const keys = {};
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'Space') e.preventDefault(); });
+addEventListener('keyup',   e => { keys[e.code] = false; });
+
+// Trục đã làm mượt, đọc bởi [FLIGHT]
+const input = { pitch: 0, roll: 0, yaw: 0 };
+
+function updateInput(dt) {
+  const tPitch = (keys['KeyS'] ? 1 : 0) - (keys['KeyW'] ? 1 : 0); // S ngóc, W chúc
+  const tRoll  = (keys['KeyA'] ? 1 : 0) - (keys['KeyD'] ? 1 : 0);
+  const tYaw   = (keys['KeyQ'] ? 1 : 0) - (keys['KeyE'] ? 1 : 0);
+  const k = Math.min(1, CFG.INPUT_SMOOTH * dt);
+  input.pitch += (tPitch - input.pitch) * k;
+  input.roll  += (tRoll  - input.roll ) * k;
+  input.yaw   += (tYaw   - input.yaw  ) * k;
+}
+
+// ===========================================================================
+// [WORLD] — scene, sky, fog, mặt đất tạm
+// ===========================================================================
+const scene = new THREE.Scene();
+
+// Skybox gradient: chân trời ấm -> đỉnh trời xanh đậm (shader trên sphere lớn)
+const skyGeo = new THREE.SphereGeometry(6000, 24, 12);
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false,
+  uniforms: {
+    topColor:     { value: new THREE.Color(0x14356e) },
+    horizonColor: { value: new THREE.Color(0xf2b46a) },
+  },
+  vertexShader: `
+    varying vec3 vDir;
+    void main() { vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform vec3 topColor; uniform vec3 horizonColor;
+    varying vec3 vDir;
+    void main() {
+      float h = clamp(vDir.y, 0.0, 1.0);
+      gl_FragColor = vec4(mix(horizonColor, topColor, pow(h, 0.55)), 1.0);
+    }`,
+});
+const sky = new THREE.Mesh(skyGeo, skyMat);
+scene.add(sky);
+
+scene.fog = new THREE.Fog(0xf2b46a, 800, 5200); // fog khớp màu chân trời
+
+const sun = new THREE.DirectionalLight(0xfff2d9, 2.2);
+sun.position.set(0.5, 1, 0.3);
+scene.add(sun, new THREE.HemisphereLight(0x9ec8ff, 0xc9a06a, 0.9));
+
+// Mặt đất tạm (Phase 2 thay bằng terrain thật): plane màu + lưới tham chiếu
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(9000, 9000),
+  new THREE.MeshLambertMaterial({ color: 0x6d8f5a })
+);
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+const grid = new THREE.GridHelper(9000, 90, 0x3d5c34, 0x50713f);
+grid.position.y = 0.5;
+scene.add(grid);
+
+// Vài khối hộp rải rác để cảm nhận tốc độ/độ cao
+{
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const boxMat = new THREE.MeshLambertMaterial({ color: 0x8a7f6a });
+  const boxes = new THREE.InstancedMesh(boxGeo, boxMat, 200);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+  for (let i = 0; i < 200; i++) {
+    const h = 20 + Math.random() * 120;
+    s.set(15 + Math.random() * 40, h, 15 + Math.random() * 40);
+    m.compose(
+      new THREE.Vector3((Math.random() - .5) * 8000, h / 2, (Math.random() - .5) * 8000),
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.random() * Math.PI), s);
+    boxes.setMatrixAt(i, m);
+  }
+  scene.add(boxes);
+}
+
+// ===========================================================================
+// [PLANE] — tiêm kích low-poly từ primitive
+// Quy ước: mũi máy bay hướng -Z (chuẩn "forward" của Three.js)
+// ===========================================================================
+function buildPlane() {
+  const g = new THREE.Group();
+  const bodyMat  = new THREE.MeshStandardMaterial({ color: 0x8fa3b8, flatShading: true, metalness: .3, roughness: .6 });
+  const darkMat  = new THREE.MeshStandardMaterial({ color: 0x51606f, flatShading: true, metalness: .3, roughness: .7 });
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0x2c4a6e, flatShading: true, metalness: .8, roughness: .15 });
+
+  // Thân thuôn: 2 nón nối lưng nhau
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(1.1, 5, 8), bodyMat);
+  nose.rotation.x = -Math.PI / 2; nose.position.z = -4;
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(1.1, 7, 8), bodyMat);
+  tail.rotation.x =  Math.PI / 2; tail.position.z = 2;
+  g.add(nose, tail);
+
+  // Kính buồng lái
+  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.85, 8, 6), glassMat);
+  canopy.scale.set(0.9, 0.8, 1.8); canopy.position.set(0, 0.75, -2.2);
+  g.add(canopy);
+
+  // Cánh delta (tam giác extrude mỏng)
+  const wingShape = new THREE.Shape();
+  wingShape.moveTo(0, -3.2); wingShape.lineTo(7, 2.6); wingShape.lineTo(0, 2.6); wingShape.closePath();
+  const wingGeo = new THREE.ExtrudeGeometry(wingShape, { depth: 0.18, bevelEnabled: false });
+  wingGeo.rotateX(Math.PI / 2); // shape (x,y) -> mặt phẳng (x,z)
+  const wingR = new THREE.Mesh(wingGeo, darkMat);
+  const wingL = new THREE.Mesh(wingGeo, darkMat);
+  wingL.scale.x = -1;
+  g.add(wingR, wingL);
+
+  // Hai cánh đuôi đứng chữ V
+  const finShape = new THREE.Shape();
+  finShape.moveTo(0, 0); finShape.lineTo(2.4, 0); finShape.lineTo(2.0, 2.2); finShape.lineTo(1.2, 2.2); finShape.closePath();
+  const finGeo = new THREE.ExtrudeGeometry(finShape, { depth: 0.15, bevelEnabled: false });
+  finGeo.rotateY(Math.PI / 2); // dựng đứng, dọc theo Z
+  for (const sx of [-1, 1]) {
+    const fin = new THREE.Mesh(finGeo, darkMat);
+    fin.position.set(sx * 1.0, 0.3, 2.2);
+    fin.rotation.z = -sx * 0.35; // ngả ra ngoài
+    g.add(fin);
+  }
+  return g;
+}
+
+const planeMesh = buildPlane();
+scene.add(planeMesh);
+
+// ===========================================================================
+// [FLIGHT] — trạng thái + mô hình bay arcade (fixed 60Hz)
+// ===========================================================================
+const plane = {
+  pos: new THREE.Vector3(0, 200, 0),
+  quat: new THREE.Quaternion(),
+  speed: 90,
+  throttle: 0.4,            // 0..1
+};
+
+const _fwd = new THREE.Vector3();
+const _dq = new THREE.Quaternion();
+const _axis = new THREE.Vector3();
+
+function stepFlight(dt) {
+  // --- Ga ---
+  if (keys['ShiftLeft'] || keys['ShiftRight']) plane.throttle += CFG.THROTTLE_RATE * dt;
+  if (keys['ControlLeft'] || keys['ControlRight']) plane.throttle -= CFG.THROTTLE_RATE * dt;
+  plane.throttle = THREE.MathUtils.clamp(plane.throttle, 0, 1);
+
+  // --- Tốc độ tiến về mục tiêu theo ga ---
+  const targetSpeed = CFG.THROTTLE_MIN + plane.throttle * (CFG.THROTTLE_MAX - CFG.THROTTLE_MIN);
+  plane.speed += (targetSpeed - plane.speed) * Math.min(1, CFG.SPEED_RESPONSE * dt);
+
+  // --- Xoay theo input (trục cục bộ của máy bay) ---
+  // pitch quanh X, yaw quanh Y, roll quanh Z
+  _dq.setFromAxisAngle(_axis.set(1, 0, 0), input.pitch * CFG.PITCH_RATE * dt);
+  plane.quat.multiply(_dq);
+  _dq.setFromAxisAngle(_axis.set(0, 1, 0), input.yaw * CFG.YAW_RATE * dt);
+  plane.quat.multiply(_dq);
+  _dq.setFromAxisAngle(_axis.set(0, 0, 1), input.roll * CFG.ROLL_RATE * dt);
+  plane.quat.multiply(_dq);
+
+  // --- Stall: dưới ngưỡng thì mũi bị kéo chúc xuống (quanh trục X thế giới-hóa) ---
+  if (plane.speed < CFG.STALL_SPEED) {
+    const severity = 1 - plane.speed / CFG.STALL_SPEED; // 0..1
+    _dq.setFromAxisAngle(_axis.set(1, 0, 0), severity * CFG.STALL_PITCH * dt);
+    plane.quat.multiply(_dq);
+  }
+  plane.quat.normalize();
+
+  // --- Di chuyển dọc vector mũi ---
+  _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+  plane.pos.addScaledVector(_fwd, plane.speed * dt);
+
+  // --- Chạm đất/trần: nảy lại + giảm tốc ---
+  if (plane.pos.y < CFG.GROUND_Y) { plane.pos.y = CFG.GROUND_Y; plane.speed *= 0.85; bounceNoseUp(); }
+  if (plane.pos.y > CFG.CEILING_Y) plane.pos.y = CFG.CEILING_Y;
+
+  planeMesh.position.copy(plane.pos);
+  planeMesh.quaternion.copy(plane.quat);
+}
+
+// Chạm đất: ép mũi ngóc nhẹ lên để "nảy" ra
+function bounceNoseUp() {
+  _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+  if (_fwd.y < 0.15) {
+    _dq.setFromAxisAngle(_axis.set(1, 0, 0), -0.06);
+    plane.quat.multiply(_dq);
+  }
+}
+
+// ===========================================================================
+// [CAMERA] — bám đuôi với độ trễ lò xo
+// Vị trí camera lerp về điểm neo sau đuôi => khi quẹo gấp máy bay
+// "văng" khỏi tâm màn hình rồi camera đuổi theo, tạo cảm giác tốc độ.
+// ===========================================================================
+const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.1, 12000);
+const camPos = new THREE.Vector3(0, 210, 30); // vị trí hiện tại (có trễ)
+const _anchor = new THREE.Vector3(), _lookAt = new THREE.Vector3(), _up = new THREE.Vector3();
+
+function updateCamera(dt) {
+  // Điểm neo: sau và trên máy bay theo hệ tọa độ máy bay
+  _anchor.set(0, CFG.CAM_UP, CFG.CAM_BACK).applyQuaternion(plane.quat).add(plane.pos);
+  camPos.lerp(_anchor, Math.min(1, CFG.CAM_STIFF * dt));
+
+  // Nhìn về điểm trước mũi; up trộn giữa up máy bay và up thế giới để đỡ chóng mặt
+  _fwd.set(0, 0, -1).applyQuaternion(plane.quat);
+  _lookAt.copy(plane.pos).addScaledVector(_fwd, CFG.CAM_LOOK_AHEAD);
+  _up.set(0, 1, 0).applyQuaternion(plane.quat).lerp(new THREE.Vector3(0, 1, 0), 0.5).normalize();
+
+  camera.position.copy(camPos);
+  camera.up.copy(_up);
+  camera.lookAt(_lookAt);
+  sky.position.copy(camPos); // skybox bám camera
+}
+
+// ===========================================================================
+// [LOOP] — fixed timestep 60Hz tách khỏi render
+// ===========================================================================
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const dbgSpeed = document.getElementById('dbgSpeed');
+const dbgAlt = document.getElementById('dbgAlt');
+
+let accumulator = 0, lastTime = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  accumulator += Math.min((now - lastTime) / 1000, 0.25); // kẹp khi tab ngủ
+  lastTime = now;
+
+  while (accumulator >= CFG.DT) {
+    updateInput(CFG.DT);
+    stepFlight(CFG.DT);
+    accumulator -= CFG.DT;
+  }
+  updateCamera(Math.min((now - lastTime) / 1000 + CFG.DT, 0.05)); // camera mượt theo frame
+
+  dbgSpeed.textContent = plane.speed.toFixed(0);
+  dbgAlt.textContent = plane.pos.y.toFixed(0);
+  renderer.render(scene, camera);
+}
+requestAnimationFrame(frame);
+</script>
 </body>
 </html>
